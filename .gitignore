@@ -1,0 +1,11 @@
+.DS_Store
+*.retry
+*.log
+*.bak
+*.swp
+*.swo
+*.tmp
+.secret*
+.sops.yaml
+.vscode/
+.idea/
