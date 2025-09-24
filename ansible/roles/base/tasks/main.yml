@@ -1,0 +1,121 @@
+---
+- name: Update apt cache (Ubuntu)
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [base, packages]
+
+- name: Upgrade packages (safe)
+  ansible.builtin.apt:
+    upgrade: safe
+  tags: [base, packages]
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+  tags: [base, packages]
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+  tags: [base, time]
+
+- name: Ensure timesyncd enabled
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: yes
+    state: started
+  tags: [base, time]
+
+- name: Disable swap (runtime)
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+  tags: [k8s, swap]
+
+- name: Remove /swap.img from fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^\s*/swap\.img\s+none\s+swap\s+sw\s+0\s+0\s*$'
+    state: absent
+    backup: yes
+  tags: [k8s, swap]
+
+- name: Delete /swap.img
+  ansible.builtin.file:
+    path: /swap.img
+    state: absent
+  tags: [k8s, swap]
+- name: Ensure br_netfilter loaded
+  ansible.builtin.modprobe:
+    name: br_netfilter
+    state: present
+  tags: [base, k8s, kernel]
+
+- name: Ensure overlay loaded
+  ansible.builtin.modprobe:
+    name: overlay
+    state: present
+  tags: [base, k8s, kernel]
+
+- name: Persist kernel modules
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      br_netfilter
+      overlay
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload modules
+  tags: [base, k8s, kernel]
+
+- name: Apply Kubernetes sysctl params
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k8s.conf
+    content: |
+      {% for k, v in k8s_sysctl.items() -%}
+      {{ k }} = {{ v }}
+      {% endfor -%}
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload sysctl
+  tags: [base, k8s, sysctl]
+
+- name: Ensure SSH service enabled
+  ansible.builtin.systemd:
+    name: ssh
+    enabled: yes
+    state: started
+  tags: [base, ssh]
+
+- name: Create GitOps root
+  ansible.builtin.file:
+    path: "{{ gitops_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  tags: [base, gitops]
+
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: manage_ufw
+  tags: [base, firewall]
+
+- name: Allow SSH on UFW
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+  when: manage_ufw
+  tags: [base, firewall]
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+    logging: 'on'
+  when: manage_ufw
+  tags: [base, firewall]

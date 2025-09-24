@@ -1,0 +1,5 @@
+- name: Base config on all nodes
+  hosts: all
+  become: true
+  roles:
+    - { role: base, tags: ["base","packages","time","k8s","ssh","gitops","firewall"] }

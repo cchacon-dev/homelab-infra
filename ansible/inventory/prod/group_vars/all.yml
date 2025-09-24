@@ -1,0 +1,21 @@
+timezone: "America/Costa_Rica"
+gitops_root: "/srv/gitops"
+
+base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - htop
+  - tmux
+  - vim
+  - unzip
+  - gnupg
+  - jq
+
+k8s_sysctl:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1
+
+enable_unattended_upgrades: false
+manage_ufw: false

@@ -1,0 +1,6 @@
+---
+- name: Reload sysctl
+  ansible.builtin.command: sysctl --system
+
+- name: Reload modules
+  ansible.builtin.command: /sbin/modprobe -a br_netfilter overlay
