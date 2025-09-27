@@ -28,6 +28,14 @@ jobs:
         env:
           ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
+      - name: Install Ansible + galaxy deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible>=10"
+          ansible-galaxy collection install -r collections/requirements.yml -p ~/.ansible/collections
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
+
       - name: Run pre-commit
         uses: pre-commit/action@v3.0.1
         with:

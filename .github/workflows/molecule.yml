@@ -41,6 +41,12 @@ jobs:
         env:
           ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
+      - name: Install galaxy collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml -p ~/.ansible/collections
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
+
       - name: Run Molecule tests for base role
         working-directory: ansible/roles/base
         env:
