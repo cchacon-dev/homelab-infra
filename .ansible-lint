@@ -1,0 +1,9 @@
+---
+warn_list:
+  - experimental
+skip_list:
+  - fqcn-builtins
+exclude_paths:
+  - .git/
+  - .venv/
+  - molecule/

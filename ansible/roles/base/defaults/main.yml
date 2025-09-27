@@ -14,10 +14,10 @@ base_packages:
   - gnupg
   - jq
 
+base_manage_ufw: false
+base_enable_unattended_upgrades: false
+
 base_k8s_sysctl:
   net.bridge.bridge-nf-call-iptables: 1
   net.bridge.bridge-nf-call-ip6tables: 1
   net.ipv4.ip_forward: 1
-
-base_enable_unattended_upgrades: false
-base_manage_ufw: false

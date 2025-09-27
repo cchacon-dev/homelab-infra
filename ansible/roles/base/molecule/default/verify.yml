@@ -1,0 +1,44 @@
+---
+- name: Verify base role
+  hosts: all
+  gather_facts: true
+
+  tasks:
+    # User check (works in container because we created it in converge)
+    - name: Check "ansible" user exists
+      ansible.builtin.command: id ansible
+      register: id_out
+      changed_when: false
+      failed_when: id_out.rc != 0
+
+    # authorized_keys check (we seeded it in converge for containers)
+    - name: Check SSH authorized_keys exists
+      ansible.builtin.stat:
+        path: /home/ansible/.ssh/authorized_keys
+      register: authkeys
+
+    - name: Assert authorized_keys exists
+      ansible.builtin.assert:
+        that: authkeys.stat.exists
+        success_msg: "authorized_keys present"
+        fail_msg: "~ansible/.ssh/authorized_keys missing"
+
+    # PasswordAuthentication check — only on non-containers
+    - name: Check PasswordAuthentication is disabled (non-containers only)
+      when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+      block:
+        - name: Stat sshd_config
+          ansible.builtin.stat:
+            path: /etc/ssh/sshd_config
+          register: sshd_cfg
+
+        - name: Assert sshd_config exists
+          ansible.builtin.assert:
+            that: sshd_cfg.stat.exists
+            fail_msg: "/etc/ssh/sshd_config is missing"
+
+        - name: Assert PasswordAuthentication no
+          ansible.builtin.command: grep -E '^PasswordAuthentication\s+no' /etc/ssh/sshd_config
+          register: grep_pa
+          changed_when: false
+          failed_when: grep_pa.rc != 0

@@ -1,62 +1,101 @@
 ---
+# Update and upgrade
 - name: Update apt cache (Ubuntu)
   ansible.builtin.apt:
-    update_cache: yes
+    update_cache: true
     cache_valid_time: 3600
-  tags: [base, packages]
+  tags:
+    - base
+    - packages
 
 - name: Upgrade packages (safe)
   ansible.builtin.apt:
     upgrade: safe
-  tags: [base, packages]
+  tags:
+    - base
+    - packages
 
 - name: Install base packages
   ansible.builtin.apt:
     name: "{{ base_packages }}"
     state: present
-  tags: [base, packages]
+  tags:
+    - base
+    - packages
 
+# Time
 - name: Set timezone
   community.general.timezone:
-    name: "{{ timezone }}"
-  tags: [base, time]
+    name: "{{ base_timezone }}"
+  tags:
+    - base
+    - time
 
 - name: Ensure timesyncd enabled
   ansible.builtin.systemd:
     name: systemd-timesyncd
-    enabled: yes
+    enabled: true
     state: started
-  tags: [base, time]
+  when:
+    - ansible_service_mgr == "systemd"
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - (ansible_env.container | default("")) == ""
+  tags:
+    - base
+    - time
+    - systemd
 
+# Swap (skip in containers)
 - name: Disable swap (runtime)
   ansible.builtin.command: swapoff -a
+  when:
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - (ansible_swaptotal_mb | default(0) | int) > 0
   changed_when: false
-  tags: [k8s, swap]
+  tags:
+    - k8s
+    - swap
 
 - name: Remove /swap.img from fstab
   ansible.builtin.lineinfile:
     path: /etc/fstab
     regexp: '^\s*/swap\.img\s+none\s+swap\s+sw\s+0\s+0\s*$'
     state: absent
-    backup: yes
-  tags: [k8s, swap]
+    backup: true
+  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - k8s
+    - swap
 
 - name: Delete /swap.img
   ansible.builtin.file:
     path: /swap.img
     state: absent
-  tags: [k8s, swap]
+  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - k8s
+    - swap
+
+# Kernel modules (skip in containers)
 - name: Ensure br_netfilter loaded
-  ansible.builtin.modprobe:
+  community.general.modprobe:
     name: br_netfilter
     state: present
-  tags: [base, k8s, kernel]
+  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - k8s
+    - kernel
 
 - name: Ensure overlay loaded
-  ansible.builtin.modprobe:
+  community.general.modprobe:
     name: overlay
     state: present
-  tags: [base, k8s, kernel]
+  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - k8s
+    - kernel
 
 - name: Persist kernel modules
   ansible.builtin.copy:
@@ -68,54 +107,116 @@
     group: root
     mode: '0644'
   notify: Reload modules
-  tags: [base, k8s, kernel]
+  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - k8s
+    - kernel
 
+# Sysctl (safe in containers)
 - name: Apply Kubernetes sysctl params
   ansible.builtin.copy:
     dest: /etc/sysctl.d/99-k8s.conf
     content: |
-      {% for k, v in k8s_sysctl.items() -%}
+      {% for k, v in base_k8s_sysctl.items() -%}
       {{ k }} = {{ v }}
       {% endfor -%}
     owner: root
     group: root
     mode: '0644'
   notify: Reload sysctl
-  tags: [base, k8s, sysctl]
+  tags:
+    - base
+    - k8s
+    - sysctl
 
+# SSH service (skip in containers)
 - name: Ensure SSH service enabled
   ansible.builtin.systemd:
     name: ssh
-    enabled: yes
+    enabled: true
     state: started
-  tags: [base, ssh]
+  when:
+    - ansible_service_mgr == "systemd"
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - (ansible_env.container | default("")) == ""
+  tags:
+    - base
+    - ssh
+    - systemd
 
+# GitOps root
 - name: Create GitOps root
   ansible.builtin.file:
-    path: "{{ gitops_root }}"
+    path: "{{ base_gitops_root }}"
     state: directory
     owner: root
     group: root
     mode: '0755'
-  tags: [base, gitops]
+  tags:
+    - base
+    - gitops
 
+# Firewall (skip in containers)
 - name: Install UFW
   ansible.builtin.apt:
     name: ufw
     state: present
-  when: manage_ufw
-  tags: [base, firewall]
+  when:
+    - base_manage_ufw | default(false)
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - firewall
 
 - name: Allow SSH on UFW
   community.general.ufw:
     rule: allow
     name: OpenSSH
-  when: manage_ufw
-  tags: [base, firewall]
+  when:
+    - base_manage_ufw | default(false)
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - firewall
 
 - name: Enable UFW
   community.general.ufw:
     state: enabled
     logging: 'on'
-  when: manage_ufw
-  tags: [base, firewall]
+  when:
+    - base_manage_ufw | default(false)
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - firewall
+
+# SSH keys and hardening (skip in containers)
+- name: Ensure ansible user SSH public key is present
+  ansible.posix.authorized_key:
+    user: ansible
+    state: present
+    key: >-
+      {{ lookup('ansible.builtin.file',
+                ansible_env.HOME ~ '/.ssh/id_ed25519.pub') }}
+  when: >-
+    (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  tags:
+    - base
+    - ssh
+
+- name: Disable SSH password authentication (production-like)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+    state: present
+  notify: Restart SSH service
+  when:
+    - ansible_service_mgr == "systemd"
+    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - (ansible_env.container | default("")) == ""
+  tags:
+    - base
+    - ssh
+    - systemd

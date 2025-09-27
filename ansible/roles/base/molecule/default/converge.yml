@@ -1,0 +1,48 @@
+---
+- name: Converge base role
+  hosts: all
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    # Ensure tzdata so timezone task works on Debian/Ubuntu images
+    - name: Ensure tzdata present (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: tzdata
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+    # Create user 'ansible' only in containers (for verify step)
+    - name: Ensure 'ansible' user exists (containers only)
+      ansible.builtin.user:
+        name: ansible
+        shell: /bin/bash
+        create_home: true
+      when: (ansible_virtualization_type | default("")) in ["docker", "container"]
+
+    # Create .ssh directory with proper permissions
+    - name: Ensure .ssh directory for ansible (containers only)
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: "0700"
+      when: (ansible_virtualization_type | default("")) in ["docker", "container"]
+
+    # Seed a dummy authorized_keys so verify can assert its presence
+    - name: Seed authorized_keys (containers only)
+      ansible.builtin.copy:
+        dest: /home/ansible/.ssh/authorized_keys
+        owner: ansible
+        group: ansible
+        mode: "0600"
+        content: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForMolecule ansible@molecule\n"
+      when: (ansible_virtualization_type | default("")) in ["docker", "container"]
+
+  roles:
+    - role: base
+      vars:
+        # Use a neutral timezone for containers
+        base_timezone: Etc/UTC
