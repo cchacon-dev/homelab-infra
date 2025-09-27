@@ -20,14 +20,30 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install dependencies (Ansible + Molecule + Docker driver)
         run: |
           python -m pip install --upgrade pip
-          pip install "ansible>=10" "molecule[docker]>=24.6.0" pytest
+          pip install \
+            "ansible>=10" \
+            "molecule>=24.6.0" \
+            "molecule-plugins[docker]>=23.5.0" \
+            "pytest>=7" \
+            "docker>=7"
+
+      - name: Sanity check Docker
+        run: |
+          docker --version
+          docker info | grep -E 'Server Version|Storage Driver'
+
+      - name: Install galaxy collections
+        run: |
+          ansible-galaxy collection install -r collections/requirements.yml -p ~/.ansible/collections
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
       - name: Run Molecule tests for base role
         working-directory: ansible/roles/base
         env:
           ANSIBLE_FORCE_COLOR: "1"
           PY_COLORS: "1"
-        run: molecule test
+        run: molecule test -s default
