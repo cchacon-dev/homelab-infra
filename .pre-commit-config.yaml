@@ -12,8 +12,10 @@ repos:
     hooks:
       - id: yamllint
         args: ["-s"]
+        exclude: ^ansible/inventory/.*/group_vars/.*/vault\.yml$
 
   - repo: https://github.com/ansible/ansible-lint
     rev: v25.9.0
     hooks:
       - id: ansible-lint
+        exclude: ^ansible/inventory/.*/group_vars/.*/vault\.yml$

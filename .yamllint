@@ -6,6 +6,7 @@ ignore: |
   .venv
   .tox
   *.retry
+  ansible/inventory/**/group_vars/**/vault.yml
 
 rules:
   braces:

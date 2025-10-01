@@ -191,16 +191,47 @@
     - base
     - firewall
 
+# ==== Controller public key (agent-based, portable) ====
+- name: Read public keys from ssh-agent (localhost)
+  run_once: true
+  delegate_to: localhost
+  become: false
+  vars:
+    _agent_cmd: "ssh-add -L | awk 'NF'"
+  set_fact:
+    base_controller_pubkeys: "{{ lookup('pipe', _agent_cmd) | default('', true) }}"
+
+- name: Pick first public key from agent
+  run_once: true
+  delegate_to: localhost
+  become: false
+  set_fact:
+    base_controller_pubkey: "{{ (base_controller_pubkeys.splitlines() | first) | default('', true) }}"
+
+- name: Fail if no public key found in agent
+  run_once: true
+  delegate_to: localhost
+  become: false
+  when: base_controller_pubkey | length == 0
+  ansible.builtin.fail:
+    msg: >
+      No public key found in ssh-agent.
+      Start the agent and add your key:
+      eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+  tags:
+    - base
+    - ssh
+
 # SSH keys and hardening (skip in containers)
 - name: Ensure ansible user SSH public key is present
+  when:
+    - (ansible_virtualization_type | default('')) not in ['docker', 'container']
+    - base_manage_authorized_key | default(true) | bool
+  become: true
   ansible.posix.authorized_key:
     user: ansible
     state: present
-    key: >-
-      {{ lookup('ansible.builtin.file',
-                ansible_env.HOME ~ '/.ssh/id_ed25519.pub') }}
-  when: >-
-    (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    key: "{{ base_controller_pubkey }}"
   tags:
     - base
     - ssh
