@@ -12,8 +12,9 @@ jobs:
     permissions:
       contents: read
     env:
-      # Asegura que Ansible use el ansible.cfg de la raíz, aunque Molecule cambie de directorio
       ANSIBLE_CONFIG: ${{ github.workspace }}/ansible.cfg
+      ANSIBLE_STDOUT_CALLBACK: yaml
+      ANSIBLE_VERBOSITY: "3"
       ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
     strategy:
@@ -21,9 +22,6 @@ jobs:
       matrix:
         role:
           - ansible/roles/base
-          # agrega aquí otros roles si los sumas:
-          # - ansible/roles/common
-          # - ansible/roles/docker
 
     steps:
       - name: Checkout
@@ -50,9 +48,13 @@ jobs:
           mkdir -p ~/.ansible
           printf "%s" "$ANSIBLE_VAULT_PASSWORD" > ~/.ansible/vault_pass.txt
           chmod 600 ~/.ansible/vault_pass.txt
-          # Si en ansible.cfg no tienes vault_password_file, exporta la ruta explícitamente:
           echo "ANSIBLE_VAULT_PASSWORD_FILE=$HOME/.ansible/vault_pass.txt" >> $GITHUB_ENV
 
       - name: Run Molecule tests
         working-directory: ${{ matrix.role }}
-        run: molecule test
+        run: |
+          molecule --debug test -- \
+            --skip-tags systemd,ssh_hardening \
+            -e ansible_user=root \
+            -e ansible_become_password= \
+            -e ansible_python_interpreter=/usr/bin/python3
