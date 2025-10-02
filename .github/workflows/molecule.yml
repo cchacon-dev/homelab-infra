@@ -11,12 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # Asegura que Ansible use el ansible.cfg de la raíz, aunque Molecule cambie de directorio
+      ANSIBLE_CONFIG: ${{ github.workspace }}/ansible.cfg
+      ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
     strategy:
       fail-fast: false
       matrix:
         role:
           - ansible/roles/base
+          # agrega aquí otros roles si los sumas:
           # - ansible/roles/common
           # - ansible/roles/docker
 
@@ -37,8 +42,6 @@ jobs:
       - name: Install Ansible Galaxy collections
         run: |
           ansible-galaxy collection install -r collections/requirements.yml -p ~/.ansible/collections
-        env:
-          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
 
       - name: Write Ansible Vault password
         env:
@@ -47,11 +50,9 @@ jobs:
           mkdir -p ~/.ansible
           printf "%s" "$ANSIBLE_VAULT_PASSWORD" > ~/.ansible/vault_pass.txt
           chmod 600 ~/.ansible/vault_pass.txt
+          # Si en ansible.cfg no tienes vault_password_file, exporta la ruta explícitamente:
           echo "ANSIBLE_VAULT_PASSWORD_FILE=$HOME/.ansible/vault_pass.txt" >> $GITHUB_ENV
 
       - name: Run Molecule tests
         working-directory: ${{ matrix.role }}
-        env:
-          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections
-        run: |
-          molecule test
+        run: molecule test
