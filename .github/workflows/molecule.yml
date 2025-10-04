@@ -70,5 +70,7 @@ jobs:
         env:
           ANSIBLE_FORCE_COLOR: "1"
           ANSIBLE_COLLECTIONS_PATHS: ~/.ansible/collections:/usr/share/ansible/collections
+          MOLECULE_DEBUG: "1"
+          ANSIBLE_VERBOSITY: "3"
         run: |
-          molecule --debug test -vvv
+          molecule test
