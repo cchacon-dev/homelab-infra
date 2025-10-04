@@ -1,5 +1,5 @@
 ---
-# Update and upgrade
+# ===== Update & Packages =====
 - name: Update apt cache (Ubuntu)
   ansible.builtin.apt:
     update_cache: true
@@ -23,10 +23,58 @@
     - base
     - packages
 
-# Time
-- name: Set timezone
+# ===== Time & Timezone =====
+- name: Detect container environment
+  ansible.builtin.set_fact:
+    base_is_container: "{{ (ansible_virtualization_type | default('')) in ['docker', 'container', 'lxc'] }}"
+  tags:
+    - base
+    - time
+
+# Containers: link /etc/localtime and write /etc/timezone
+- name: "Containers | link /etc/localtime"
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ base_timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+  when: base_is_container | bool
+  tags:
+    - base
+    - time
+
+- name: "Containers | write /etc/timezone (Debian-like)"
+  ansible.builtin.copy:
+    dest: /etc/timezone
+    content: "{{ base_timezone }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - base_is_container | bool
+    - ansible_os_family == "Debian"
+  tags:
+    - base
+    - time
+
+# Non-containers: install util-linux & set timezone
+- name: "Non-containers | ensure util-linux (hwclock)"
+  ansible.builtin.apt:
+    name: util-linux
+    state: present
+    update_cache: true
+  when:
+    - not base_is_container | bool
+    - ansible_os_family == "Debian"
+  tags:
+    - base
+    - time
+
+- name: "Non-containers | set timezone"
   community.general.timezone:
     name: "{{ base_timezone }}"
+    hwclock: UTC
+  when: not base_is_container | bool
   tags:
     - base
     - time
@@ -38,18 +86,17 @@
     state: started
   when:
     - ansible_service_mgr == "systemd"
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
-    - (ansible_env.container | default("")) == ""
+    - not base_is_container | bool
   tags:
     - base
     - time
     - systemd
 
-# Swap (skip in containers)
+# ===== Swap (skip in containers) =====
 - name: Disable swap (runtime)
   ansible.builtin.command: swapoff -a
   when:
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - not base_is_container | bool
     - (ansible_swaptotal_mb | default(0) | int) > 0
   changed_when: false
   tags:
@@ -62,7 +109,7 @@
     regexp: '^\s*/swap\.img\s+none\s+swap\s+sw\s+0\s+0\s*$'
     state: absent
     backup: true
-  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  when: not base_is_container | bool
   tags:
     - k8s
     - swap
@@ -71,17 +118,17 @@
   ansible.builtin.file:
     path: /swap.img
     state: absent
-  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  when: not base_is_container | bool
   tags:
     - k8s
     - swap
 
-# Kernel modules (skip in containers)
+# ===== Kernel modules (skip in containers) =====
 - name: Ensure br_netfilter loaded
   community.general.modprobe:
     name: br_netfilter
     state: present
-  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  when: not base_is_container | bool
   tags:
     - base
     - k8s
@@ -91,11 +138,12 @@
   community.general.modprobe:
     name: overlay
     state: present
-  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  when: not base_is_container | bool
   tags:
     - base
     - k8s
     - kernel
+
 
 - name: Persist kernel modules
   ansible.builtin.copy:
@@ -107,13 +155,13 @@
     group: root
     mode: '0644'
   notify: Reload modules
-  when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+  when: not base_is_container | bool
   tags:
     - base
     - k8s
     - kernel
 
-# Sysctl (safe in containers)
+# ===== Sysctl (safe in containers) =====
 - name: Apply Kubernetes sysctl params
   ansible.builtin.copy:
     dest: /etc/sysctl.d/99-k8s.conf
@@ -130,7 +178,7 @@
     - k8s
     - sysctl
 
-# SSH service (skip in containers)
+# ===== SSH service (skip in containers) =====
 - name: Ensure SSH service enabled
   ansible.builtin.systemd:
     name: ssh
@@ -138,14 +186,13 @@
     state: started
   when:
     - ansible_service_mgr == "systemd"
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
-    - (ansible_env.container | default("")) == ""
+    - not base_is_container | bool
   tags:
     - base
     - ssh
     - systemd
 
-# GitOps root
+# ===== GitOps root =====
 - name: Create GitOps root
   ansible.builtin.file:
     path: "{{ base_gitops_root }}"
@@ -157,14 +204,14 @@
     - base
     - gitops
 
-# Firewall (skip in containers)
+# ===== Firewall (skip in containers) =====
 - name: Install UFW
   ansible.builtin.apt:
     name: ufw
     state: present
   when:
-    - base_manage_ufw | default(false)
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - base_manage_ufw | bool
+    - not base_is_container | bool
   tags:
     - base
     - firewall
@@ -174,8 +221,8 @@
     rule: allow
     name: OpenSSH
   when:
-    - base_manage_ufw | default(false)
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - base_manage_ufw | bool
+    - not base_is_container | bool
   tags:
     - base
     - firewall
@@ -185,14 +232,15 @@
     state: enabled
     logging: 'on'
   when:
-    - base_manage_ufw | default(false)
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - base_manage_ufw | bool
+    - not base_is_container | bool
   tags:
     - base
     - firewall
 
-# ==== Controller public key (agent-based, portable) ====
+# ===== Controller public key (agent-based, optional) =====
 - name: Read public keys from ssh-agent (localhost)
+  when: base_manage_authorized_key | bool
   run_once: true
   delegate_to: localhost
   become: false
@@ -200,34 +248,25 @@
     _agent_cmd: "ssh-add -L | awk 'NF'"
   set_fact:
     base_controller_pubkeys: "{{ lookup('pipe', _agent_cmd) | default('', true) }}"
+  tags:
+    - base
+    - ssh
 
 - name: Pick first public key from agent
+  when: base_manage_authorized_key | bool
   run_once: true
   delegate_to: localhost
   become: false
   set_fact:
     base_controller_pubkey: "{{ (base_controller_pubkeys.splitlines() | first) | default('', true) }}"
-
-- name: Fail if no public key found in agent
-  run_once: true
-  delegate_to: localhost
-  become: false
-  when: base_controller_pubkey | length == 0
-  ansible.builtin.fail:
-    msg: >
-      No public key found in ssh-agent.
-      Start the agent and add your key:
-      eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
   tags:
     - base
     - ssh
 
-# SSH keys and hardening (skip in containers)
 - name: Ensure ansible user SSH public key is present
   when:
-    - (ansible_virtualization_type | default('')) not in ['docker', 'container']
-    - base_manage_authorized_key | default(true) | bool
-  become: true
+    - base_manage_authorized_key | bool
+    - not base_is_container | bool
   ansible.posix.authorized_key:
     user: ansible
     state: present
@@ -245,8 +284,7 @@
   notify: Restart SSH service
   when:
     - ansible_service_mgr == "systemd"
-    - (ansible_virtualization_type | default("")) not in ["docker", "container"]
-    - (ansible_env.container | default("")) == ""
+    - not base_is_container | bool
   tags:
     - base
     - ssh

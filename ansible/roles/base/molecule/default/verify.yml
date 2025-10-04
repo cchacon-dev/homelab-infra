@@ -2,43 +2,98 @@
 - name: Verify base role
   hosts: all
   gather_facts: true
+  become: true
+
+  vars:
+    expected_timezone: "Etc/UTC"
 
   tasks:
-    # User check (works in container because we created it in converge)
-    - name: Check "ansible" user exists
+    - name: "Check ansible user exists"
       ansible.builtin.command: id ansible
       register: id_out
       changed_when: false
       failed_when: id_out.rc != 0
 
-    # authorized_keys check (we seeded it in converge for containers)
-    - name: Check SSH authorized_keys exists
+    - name: "Stat ansible .ssh directory"
+      ansible.builtin.stat:
+        path: /home/ansible/.ssh
+      register: ssh_dir
+
+    - name: "Assert .ssh directory is secure"
+      ansible.builtin.assert:
+        that:
+          - ssh_dir.stat.exists
+          - ssh_dir.stat.isdir
+          - ssh_dir.stat.pw_name == 'ansible'
+          - ssh_dir.stat.gr_name == 'ansible'
+          - ssh_dir.stat.mode | int(base=8) == 0o700
+
+    - name: "Stat authorized_keys"
       ansible.builtin.stat:
         path: /home/ansible/.ssh/authorized_keys
       register: authkeys
 
-    - name: Assert authorized_keys exists
+    - name: "Assert authorized_keys is secure"
       ansible.builtin.assert:
-        that: authkeys.stat.exists
-        success_msg: "authorized_keys present"
-        fail_msg: "~ansible/.ssh/authorized_keys missing"
+        that:
+          - authkeys.stat.exists
+          - authkeys.stat.isreg
+          - authkeys.stat.pw_name == 'ansible'
+          - authkeys.stat.gr_name == 'ansible'
+          - authkeys.stat.mode | int(base=8) == 0o600
+          - authkeys.stat.size > 0
 
-    # PasswordAuthentication check — only on non-containers
-    - name: Check PasswordAuthentication is disabled (non-containers only)
-      when: (ansible_virtualization_type | default("")) not in ["docker", "container"]
+    - name: "Read /etc/timezone on Debian"
+      ansible.builtin.slurp:
+        path: /etc/timezone
+      register: tzfile
+      when: ansible_os_family == "Debian"
+      changed_when: false
+      failed_when: false
+
+    - name: "Assert timezone on Debian"
+      ansible.builtin.assert:
+        that: "(tzfile.content | b64decode | trim) == expected_timezone"
+      when: ansible_os_family == "Debian" and tzfile is defined and tzfile.content is defined
+
+    - name: "Read /etc/localtime symlink"
+      ansible.builtin.command: readlink -f /etc/localtime
+      register: tzlink
+      changed_when: false
+      failed_when: false
+
+    - name: "Assert timezone via symlink"
+      ansible.builtin.assert:
+        that: "expected_timezone.split('/')[-1] in (tzlink.stdout | default(''))"
+      when: tzlink.stdout is defined and tzlink.stdout != ""
+
+    - name: "Check PasswordAuthentication is disabled"
+      when: (ansible_virtualization_type | default('')) not in ['docker', 'container', 'lxc']
       block:
-        - name: Stat sshd_config
-          ansible.builtin.stat:
-            path: /etc/ssh/sshd_config
-          register: sshd_cfg
+        - name: "Locate sshd binary"
+          ansible.builtin.shell: |
+            set -o pipefail
+            command -v sshd || command -v /usr/sbin/sshd || true
+          args:
+            executable: /bin/bash
+          register: sshd_bin
+          changed_when: false
 
-        - name: Assert sshd_config exists
+        - name: "Run sshd -T"
+          ansible.builtin.command: "{{ sshd_bin.stdout }} -T"
+          register: sshd_t
+          changed_when: false
+          failed_when: false
+          when: sshd_bin.stdout != ""
+
+        - name: "Assert PasswordAuthentication no (sshd -T)"
           ansible.builtin.assert:
-            that: sshd_cfg.stat.exists
-            fail_msg: "/etc/ssh/sshd_config is missing"
+            that: "'passwordauthentication no' in (sshd_t.stdout | default(''))"
+          when: sshd_bin.stdout != "" and (sshd_t.stdout | default('')) != ""
 
-        - name: Assert PasswordAuthentication no
-          ansible.builtin.command: grep -E '^PasswordAuthentication\s+no' /etc/ssh/sshd_config
+        - name: "Fallback grep sshd_config"
+          ansible.builtin.command: grep -E '^[[:space:]]*PasswordAuthentication[[:space:]]+no' /etc/ssh/sshd_config
           register: grep_pa
           changed_when: false
           failed_when: grep_pa.rc != 0
+          when: sshd_bin.stdout == ""

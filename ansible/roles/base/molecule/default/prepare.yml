@@ -1,0 +1,8 @@
+---
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: No-op
+      ansible.builtin.debug:
+        msg: "prepare stage skipped"

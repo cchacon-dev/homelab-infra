@@ -16,6 +16,7 @@ base_packages:
 
 base_manage_ufw: false
 base_enable_unattended_upgrades: false
+base_manage_authorized_key: false
 
 base_k8s_sysctl:
   net.bridge.bridge-nf-call-iptables: 1
