@@ -1,6 +1,5 @@
 ---
 ansible_user: ansible
-ansible_ssh_private_key_file: ~/.ssh/id_ed25519
 ansible_port: 22
 ansible_become: true
 ansible_become_method: sudo
@@ -8,6 +7,17 @@ ansible_become_password: "{{ vault_become_password }}"
 base_manage_authorized_key: true
 base_timezone: "America/Costa_Rica"
 base_gitops_root: "/srv/gitops"
+ansible_ssh_private_key_file: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519"
+
+k3s_cluster_cidr: "10.42.0.0/16"
+k3s_service_cidr: "10.43.0.0/16"
+
+k3s_version: "v1.33.5+k3s1"
+cilium_version: "1.18.2"
+
+k3s_api_host: "{{ hostvars['cp01-homelab']['ansible_host'] }}"
+k3s_api_port: 6443
+k3s_server_url: "https://{{ k3s_api_host }}:{{ k3s_api_port }}"
 
 base_packages:
   - tzdata

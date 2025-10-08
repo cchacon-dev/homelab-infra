@@ -12,3 +12,4 @@
         - ssh
         - gitops
         - firewall
+    - k3s
