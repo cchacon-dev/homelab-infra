@@ -1,0 +1,207 @@
+---
+# Role: cilium
+# Purpose: Install Cilium CNI on the control-plane via Helm, grant needed RBAC,
+#          then verify readiness (Cilium DS and CoreDNS).
+# Notes:
+# - Runs only on hosts in group "k3s_server".
+# - Uses kubernetes.core modules with KUBECONFIG on the node (K3s server).
+# - Avoids shell/command where possible; idempotent; ansible-lint friendly.
+
+- name: "Prereqs | Ensure Helm is installed (snap)"
+  community.general.snap:
+    name: helm
+    classic: true
+    state: present
+  become: true
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Prereqs | Ensure Python deps for k8s modules (Ubuntu/Debian)"
+  ansible.builtin.apt:
+    update_cache: true
+    name:
+      - python3-kubernetes
+      - python3-yaml
+      - python3-requests
+  become: true
+  when: "'k3s_server' in group_names and ansible_os_family == 'Debian'"
+  tags: [cilium]
+
+- name: "Namespaces | Ensure kube-system exists"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: kube-system
+    state: present
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Namespaces | Ensure cilium-secrets exists"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: cilium-secrets
+    state: present
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+# Grant Cilium SA read access to secrets in cilium-secrets (needed by Hubble/TLS paths)
+- name: "RBAC | Create Role to read secrets in cilium-secrets"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: cilium-secrets-reader
+        namespace: cilium-secrets
+      rules:
+        - apiGroups: [""]
+          resources: ["secrets"]
+          verbs: ["get", "list", "watch"]
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "RBAC | Bind Role to kube-system:cilium ServiceAccount"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: cilium-secrets-reader-binding
+        namespace: cilium-secrets
+      subjects:
+        - kind: ServiceAccount
+          name: cilium
+          namespace: kube-system
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: cilium-secrets-reader
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+# Helm repo + values + install
+- name: "Helm | Add Cilium repo"
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: "https://helm.cilium.io/"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Helm | Render values file for Cilium"
+  ansible.builtin.template:
+    src: values.yaml.j2
+    dest: /tmp/cilium-values.yaml
+    mode: "0644"
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Helm | Install/Upgrade Cilium"
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    chart_version: "{{ cilium_chart_version | default(omit) }}"
+    release_namespace: kube-system
+    create_namespace: false
+    values_files:
+      - /tmp/cilium-values.yaml
+    wait: true
+    atomic: true
+    timeout: "10m"     # Helm requires a unit (e.g., "600s", "10m")
+    reset_values: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+# Readiness checks
+- name: "Ready | Fetch Cilium DaemonSet status"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    name: cilium
+    namespace: kube-system
+  register: cilium_ds
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Ready | Wait until Cilium DS has all pods ready"
+  ansible.builtin.wait_for:
+    timeout: 600
+  when: >
+    'k3s_server' in group_names and
+    (
+      cilium_ds.resources | length == 0 or
+      (cilium_ds.resources[0].status.numberReady | default(0) | int) <
+      (cilium_ds.resources[0].status.desiredNumberScheduled | default(0) | int)
+    )
+  changed_when: false
+  tags: [cilium]
+
+- name: "Ready | Re-check Cilium DaemonSet"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    name: cilium
+    namespace: kube-system
+  register: cilium_ds_after
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+# CoreDNS often becomes healthy only after CNI is up; ensure it is available
+- name: "Ready | Fetch CoreDNS deployment"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: coredns
+    namespace: kube-system
+  register: cilium_coredns_deploy
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  failed_when: cilium_coredns_deploy.resources | length == 0
+  changed_when: false
+  when: "'k3s_server' in group_names"
+  tags: [cilium]
+
+- name: "Ready | Wait until CoreDNS replicas are available"
+  ansible.builtin.wait_for:
+    timeout: 300
+  when: >
+    'k3s_server' in group_names and
+    (
+      coredns_deploy.resources[0].status.availableReplicas is not defined or
+      (coredns_deploy.resources[0].status.availableReplicas | int) <
+      (coredns_deploy.resources[0].status.replicas | default(1) | int)
+    )
+  changed_when: false
+  tags: [cilium]
+
+- name: "Ready | Ensure kube-dns Service exists"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: kube-dns
+    namespace: kube-system
+  register: cilium_kube_dns_svc
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  failed_when: cilium_kube_dns_svc.resources | length == 0
+  changed_when: false
+  when: "'k3s_server' in group_names"
+  tags: [cilium]

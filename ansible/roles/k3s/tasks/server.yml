@@ -1,18 +1,16 @@
 ---
 - name: Download K3s installer script (server)
   ansible.builtin.get_url:
-    url: "https://get.k3s.io"
-    dest: "/tmp/k3s-install.sh"
+    url: "{{ k3s_install_script_url }}"
+    dest: "{{ k3s_install_script_path }}"
     mode: "0755"
-  tags:
-    - k3s
+  tags: [k3s]
 
 - name: Install K3s server (no flannel, no kube-proxy, no traefik)
   ansible.builtin.command: >
     sh {{ k3s_install_script_path }}
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_channel_version }}"
-    K3S_TOKEN: "{{ vault_k3s_token }}"
     INSTALL_K3S_EXEC: >-
       server
       {% if k3s_disable_traefik %} --disable traefik{% endif %}
@@ -21,17 +19,24 @@
       --cluster-cidr {{ k3s_cluster_cidr }}
       --service-cidr {{ k3s_service_cidr }}
       --write-kubeconfig-mode {{ k3s_write_kubeconfig_mode }}
+    K3S_TOKEN: "{{ vault_k3s_token }}"
   args:
-    creates: /usr/local/bin/k3s
+    creates: /etc/systemd/system/k3s.service
+  tags: [k3s]
 
 - name: Ensure K3s server service is enabled and running
   ansible.builtin.systemd:
     name: k3s
     enabled: true
     state: started
+  tags: [k3s]
 
-- name: Symlink kubectl to k3s kubectl (control-plane convenience)
-  ansible.builtin.file:
-    src: /usr/local/bin/k3s
-    dest: /usr/local/bin/kubectl
-    state: link
+- name: Wait for Kubernetes API to be ready (readyz)
+  ansible.builtin.command: >
+    /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get --raw=/readyz
+  register: k3s_readyz
+  retries: 30
+  delay: 5
+  until: k3s_readyz.rc == 0
+  changed_when: false
+  tags: [k3s]

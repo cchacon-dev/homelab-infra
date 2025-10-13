@@ -1,0 +1,20 @@
+# Minimal, K3s-friendly Cilium values
+
+# We disabled kube-proxy on K3s, so Cilium must replace it
+kubeProxyReplacement: true
+enableIPv4Masquerade: true
+bpf:
+  masquerade: true
+
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4PodCIDRList: ["{{ k3s_cluster_cidr }}"]
+    clusterPoolIPv4MaskSize: 24
+
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true

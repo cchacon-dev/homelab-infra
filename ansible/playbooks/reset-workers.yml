@@ -1,0 +1,56 @@
+---
+- name: Reset k3s agents on workers (clean join state)
+  hosts: k3s_workers
+  become: true
+  gather_facts: false
+
+  vars:
+    k3s_agent_dirs_to_purge:
+      - /etc/rancher/k3s
+      - /var/lib/rancher/k3s
+
+  tasks:
+    - name: Stop k3s-agent if running
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: stopped
+      register: k3s_agent_stop
+      failed_when: false
+      changed_when: k3s_agent_stop is changed
+
+    - name: Check if k3s-agent uninstall script exists
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s-agent-uninstall.sh
+      register: k3s_uninstall_script
+
+    - name: Uninstall k3s-agent (if script exists)
+      ansible.builtin.command: /usr/local/bin/k3s-agent-uninstall.sh
+      when: k3s_uninstall_script.stat.exists
+      register: k3s_uninstall
+      failed_when: false
+      changed_when: >
+        k3s_uninstall.rc == 0
+        or ('Removed K3s agent service' in (k3s_uninstall.stdout | default('')))
+
+    - name: Purge k3s agent directories (idempotent)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ k3s_agent_dirs_to_purge }}"
+
+    - name: Remove leftover k3s binaries (idempotent)
+      ansible.builtin.find:
+        paths: /usr/local/bin
+        patterns: 'k3s*'
+      register: k3s_bins
+
+    - name: Delete found k3s binaries
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ k3s_bins.files }}"
+      when: k3s_bins.matched > 0
+
+    - name: Reload systemd daemons
+      ansible.builtin.systemd:
+        daemon_reload: true

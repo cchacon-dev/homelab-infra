@@ -1,17 +1,8 @@
 ---
 - name: Install K3s server on control-plane
-  ansible.builtin.include_tasks: server.yml
+  ansible.builtin.import_tasks: server.yml
   when: "'k3s_server' in group_names"
 
-- name: Wait for Kubernetes API to be ready (from control-plane)
-  ansible.builtin.wait_for:
-    host: "{{ k3s_api_host }}"
-    port: "{{ k3s_api_port }}"
-    delay: 5
-    timeout: 180
-  run_once: true
-  delegate_to: "{{ groups['k3s_server'][0] }}"
-
-- name: Install K3s agents on workers
-  ansible.builtin.include_tasks: agent.yml
+- name: Install K3s agent on workers
+  ansible.builtin.import_tasks: agent.yml
   when: "'k3s_workers' in group_names"

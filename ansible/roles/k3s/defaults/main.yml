@@ -1,17 +1,19 @@
 ---
-k3s_channel_version: "{{ k3s_version }}"
+# ===== Versions & Paths =====
+k3s_channel_version: "v1.33.5+k3s1"
+k3s_install_script_url: "https://get.k3s.io"
+k3s_install_script_path: "/tmp/get-k3s.sh"
 
+# ===== Cluster CIDRs (must match Cilium) =====
+k3s_cluster_cidr: "10.42.0.0/16"
+k3s_service_cidr: "10.43.0.0/16"
+
+# ===== K3s feature flags =====
 k3s_disable_traefik: true
 k3s_disable_kube_proxy: true
 k3s_disable_flannel: true
-
 k3s_write_kubeconfig_mode: "0644"
 
-k3s_install_script_url: "https://get.k3s.io"
-k3s_install_script_path: "/tmp/k3s-install.sh"
-
-k3s_cluster_cidr: "{{ k3s_cluster_cidr | default('10.42.0.0/16') }}"
-k3s_service_cidr: "{{ k3s_service_cidr | default('10.43.0.0/16') }}"
-k3s_api_host: "{{ k3s_api_host }}"
-k3s_api_port: "{{ k3s_api_port | default(6443) }}"
-k3s_server_url: "{{ k3s_server_url }}"
+# ===== Derived =====
+k3s_server_ip: "{{ hostvars[groups['k3s_server'][0]].ansible_host }}"
+k3s_server_url: "https://{{ k3s_server_ip }}:6443"

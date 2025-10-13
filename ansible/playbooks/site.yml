@@ -12,4 +12,15 @@
         - ssh
         - gitops
         - firewall
-    - k3s
+    - role: k3s
+      tags:
+        - k3s
+
+- name: Install Cilium (CNI)
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  roles:
+    - role: cilium
+      tags:
+        - cilium

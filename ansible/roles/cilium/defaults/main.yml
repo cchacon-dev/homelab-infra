@@ -1,0 +1,14 @@
+---
+cilium_version: "1.18.2"
+
+cilium_k8s_service_host: >-
+  {{
+    hostvars[groups['k3s_server'][0]].ansible_host
+      | default(hostvars[groups['k3s_server'][0]].inventory_hostname, true)
+      | default('', true)
+  }}
+cilium_k8s_service_port: "6443"
+
+cilium_cluster_pool_cidrs: "10.42.0.0/16"
+
+cilium_purge_unmanaged_cilium_secrets_ns: false
