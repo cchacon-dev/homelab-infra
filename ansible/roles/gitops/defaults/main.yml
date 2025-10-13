@@ -1,0 +1,24 @@
+---
+gitops_flux_version: "v2.7.2"
+gitops_namespace: "flux-system"
+gitops_kubeconfig: "/etc/rancher/k3s/k3s.yaml"
+gitops_release_base: "https://github.com/fluxcd/flux2/releases/download"
+
+gitops_install_flux_cli: false
+gitops_flux_cli_os: "linux"
+gitops_flux_cli_arch: "amd64"
+
+gitops_enable_flux_netpol: true
+gitops_enable_flux_probe_patches: true
+gitops_enable_flux_recreate_strategy: true
+
+gitops_flux_components_wait:
+  - source-controller
+  - kustomize-controller
+  - helm-controller
+  - notification-controller
+  - image-automation-controller
+  - image-reflector-controller
+
+gitops_install_manifest_path: "/tmp/flux-install.yaml"
+gitops_cnp_include_world: true

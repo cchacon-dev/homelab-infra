@@ -1,0 +1,198 @@
+---
+###############################################################################
+# Flux GitOps: netpol + probes + estrategia + espera (lint-clean)
+###############################################################################
+
+###############################################################################
+# 0) Facts
+###############################################################################
+- name: "Vars | Compute CNP fromEntities"
+  ansible.builtin.set_fact:
+    gitops_cnp_from_entities: >-
+      {{
+        ['host', 'remote-node', 'cluster']
+        + (gitops_cnp_include_world | bool | ternary(['world'], []))
+      }}
+  tags: [gitops]
+
+###############################################################################
+# 1) Network Policy (Cilium)
+###############################################################################
+- name: "NetPol | Ensure probes are allowed towards 9440/tcp"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: cilium.io/v2
+      kind: CiliumNetworkPolicy
+      metadata:
+        name: flux-allow-kubelet-probes
+        namespace: "{{ gitops_namespace }}"
+        labels:
+          app.kubernetes.io/managed-by: ansible
+      spec:
+        endpointSelector: {}
+        ingress:
+          - fromEntities: "{{ gitops_cnp_from_entities }}"
+            toPorts:
+              - ports:
+                  - port: "9440"
+                    protocol: TCP
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
+
+###############################################################################
+# 2) Patch | Probes estándar para todos los controladores
+###############################################################################
+- name: "Patch | Normalize controller probes"
+  vars:
+    gitops_controllers:
+      - source-controller
+      - kustomize-controller
+      - helm-controller
+      - notification-controller
+      - image-automation-controller
+      - image-reflector-controller
+  loop: "{{ gitops_controllers }}"
+  kubernetes.core.k8s_json_patch:
+    kind: Deployment
+    namespace: "{{ gitops_namespace }}"
+    name: "{{ item }}"
+    patch:
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe
+        value:
+          httpGet:
+            path: /healthz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          httpGet:
+            path: /readyz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 12
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe
+        value:
+          httpGet:
+            path: /healthz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
+
+###############################################################################
+# 3) Patch | Overrides específicos para source-controller (más tolerantes)
+###############################################################################
+- name: "Patch | Source-controller probe overrides"
+  kubernetes.core.k8s_json_patch:
+    kind: Deployment
+    namespace: "{{ gitops_namespace }}"
+    name: source-controller
+    patch:
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          httpGet:
+            path: /readyz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 30
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe
+        value:
+          httpGet:
+            path: /healthz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 12
+      - op: replace
+        path: /spec/template/spec/containers/0/startupProbe
+        value:
+          httpGet:
+            path: /healthz
+            port: healthz
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
+
+###############################################################################
+# 4) Estrategia | Recreate para evitar pods duplicados
+###############################################################################
+- name: "Patch | Use Recreate strategy to avoid duplicate pods"
+  vars:
+    gitops_controllers:
+      - source-controller
+      - kustomize-controller
+      - helm-controller
+      - notification-controller
+      - image-automation-controller
+      - image-reflector-controller
+  loop: "{{ gitops_controllers }}"
+  kubernetes.core.k8s_json_patch:
+    kind: Deployment
+    namespace: "{{ gitops_namespace }}"
+    name: "{{ item }}"
+    patch:
+      - op: replace
+        path: /spec/strategy
+        value:
+          type: Recreate
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  failed_when: true
+  tags: [gitops]
+
+###############################################################################
+# 5) Wait | Controladores disponibles
+###############################################################################
+- name: "Ready | Wait for controllers to become available"
+  vars:
+    gitops_controllers:
+      - source-controller
+      - kustomize-controller
+      - helm-controller
+      - notification-controller
+      - image-automation-controller
+      - image-reflector-controller
+  loop: "{{ gitops_controllers }}"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ gitops_namespace }}"
+    name: "{{ item }}"
+  register: gitops_wait_deploy
+  until: gitops_wait_deploy.resources[0].status.availableReplicas | default(0) | int >= 1
+  retries: 30
+  delay: 10
+  changed_when: false
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
