@@ -1,4 +1,4 @@
-apiVersion: "cilium.io/v2"
+apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: flux-allow-kustomize-to-source
@@ -6,12 +6,16 @@ metadata:
 spec:
   endpointSelector:
     matchLabels:
-      app: source-controller
-  ingress:
-    - fromEndpoints:
+      app.kubernetes.io/component: kustomize-controller
+  egress:
+    - toEndpoints:
         - matchLabels:
-            app: kustomize-controller
+            app.kubernetes.io/component: source-controller
       toPorts:
         - ports:
             - port: "80"
               protocol: TCP
+            - port: "9440"
+              protocol: TCP
+  egressDeny: []
+  ingressDeny: []
