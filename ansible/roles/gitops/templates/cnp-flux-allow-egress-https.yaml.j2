@@ -1,0 +1,14 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: flux-allow-egress-https
+  namespace: {{ gitops_namespace }}
+spec:
+  endpointSelector: {}
+  egress:
+    - toEntities:
+        - world
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

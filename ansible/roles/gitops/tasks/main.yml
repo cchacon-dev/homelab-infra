@@ -1,11 +1,15 @@
 ---
-###############################################################################
-# Flux GitOps: netpol + probes + estrategia + espera (lint-clean)
-###############################################################################
+# Asegura que el namespace exista antes de aplicar CNPs o parches
+- name: "GitOps | Ensure namespace '{{ gitops_namespace }}'"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ gitops_namespace }}"
+    state: present
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
 
-###############################################################################
-# 0) Facts
-###############################################################################
 - name: "Vars | Compute CNP fromEntities"
   ansible.builtin.set_fact:
     gitops_cnp_from_entities: >-
@@ -15,9 +19,7 @@
       }}
   tags: [gitops]
 
-###############################################################################
-# 1) Network Policy (Cilium)
-###############################################################################
+# Abre el puerto 9440/tcp para las probes (healthz) desde kubelet/nodos
 - name: "NetPol | Ensure probes are allowed towards 9440/tcp"
   kubernetes.core.k8s:
     state: present
@@ -42,10 +44,8 @@
     KUBECONFIG: "{{ gitops_kubeconfig }}"
   tags: [gitops]
 
-###############################################################################
-# 2) Patch | Probes estándar para todos los controladores
-###############################################################################
-- name: "Patch | Normalize controller probes"
+# Normaliza probes de TODOS los controladores con Strategic-Merge (idempotente)
+- name: "Patch | Normalize controller probes (strategic-merge)"
   vars:
     gitops_controllers:
       - source-controller
@@ -55,124 +55,158 @@
       - image-automation-controller
       - image-reflector-controller
   loop: "{{ gitops_controllers }}"
-  kubernetes.core.k8s_json_patch:
-    kind: Deployment
-    namespace: "{{ gitops_namespace }}"
-    name: "{{ item }}"
-    patch:
-      - op: replace
-        path: /spec/template/spec/containers/0/livenessProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 12
-      - op: replace
-        path: /spec/template/spec/containers/0/readinessProbe
-        value:
-          httpGet:
-            path: /readyz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 12
-      - op: add
-        path: /spec/template/spec/containers/0/startupProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 5
-          failureThreshold: 60
+  kubernetes.core.k8s:
+    state: present
+    merge_type: strategic-merge
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ item }}"
+        namespace: "{{ gitops_namespace }}"
+      spec:
+        template:
+          spec:
+            containers:
+              - name: manager
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 12
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 12
+                startupProbe:
+                  httpGet:
+                    path: /healthz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  timeoutSeconds: 5
+                  failureThreshold: 60
   environment:
     KUBECONFIG: "{{ gitops_kubeconfig }}"
   tags: [gitops]
 
-###############################################################################
-# 3) Patch | Overrides específicos para source-controller (más tolerantes)
-###############################################################################
-- name: "Patch | Source-controller probe overrides"
-  kubernetes.core.k8s_json_patch:
-    kind: Deployment
-    namespace: "{{ gitops_namespace }}"
-    name: source-controller
-    patch:
-      - op: replace
-        path: /spec/template/spec/containers/0/readinessProbe
-        value:
-          httpGet:
-            path: /readyz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 30
-      - op: replace
-        path: /spec/template/spec/containers/0/livenessProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 12
-      - op: replace
-        path: /spec/template/spec/containers/0/startupProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 5
-          failureThreshold: 60
+# Ajustes específicos de source-controller (timeouts más largos), también strategic-merge
+- name: "Patch | Source-controller probe overrides (strategic-merge)"
+  kubernetes.core.k8s:
+    state: present
+    merge_type: strategic-merge
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: source-controller
+        namespace: "{{ gitops_namespace }}"
+      spec:
+        template:
+          spec:
+            containers:
+              - name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 10
+                  failureThreshold: 30
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 10
+                  failureThreshold: 12
+                startupProbe:
+                  httpGet:
+                    path: /healthz
+                    port: healthz
+                    scheme: HTTP
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  timeoutSeconds: 5
+                  failureThreshold: 60
   environment:
     KUBECONFIG: "{{ gitops_kubeconfig }}"
   tags: [gitops]
 
-###############################################################################
-# 4) Estrategia | Recreate para evitar pods duplicados
-###############################################################################
-- name: "Patch | Use Recreate strategy to avoid duplicate pods"
-  vars:
-    gitops_controllers:
-      - source-controller
-      - kustomize-controller
-      - helm-controller
-      - notification-controller
-      - image-automation-controller
-      - image-reflector-controller
-  loop: "{{ gitops_controllers }}"
-  kubernetes.core.k8s_json_patch:
+# Fuerza strategy.type=Recreate SOLO si hace falta (evita el error de JSON Patch)
+- name: "Flux | Get controller Deployments"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
     kind: Deployment
     namespace: "{{ gitops_namespace }}"
     name: "{{ item }}"
-    patch:
-      - op: replace
-        path: /spec/strategy
-        value:
+  loop:
+    - source-controller
+    - kustomize-controller
+    - helm-controller
+    - notification-controller
+    - image-automation-controller
+    - image-reflector-controller
+  register: gitops_flux_deploys
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+  tags: [gitops]
+
+- name: "Patch | Ensure strategy.type=Recreate (strategic-merge, only when needed)"
+  kubernetes.core.k8s:
+    state: present
+    merge_type: strategic-merge
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ item.resources[0].metadata.name }}"
+        namespace: "{{ item.resources[0].metadata.namespace }}"
+      spec:
+        strategy:
           type: Recreate
+  loop: "{{ gitops_flux_deploys.results }}"
+  when:
+    - item.resources | length > 0
+    - (item.resources[0].spec.strategy is not defined) or
+      (item.resources[0].spec.strategy.type | default('') != 'Recreate')
   environment:
     KUBECONFIG: "{{ gitops_kubeconfig }}"
-  failed_when: true
   tags: [gitops]
 
-###############################################################################
-# 5) Wait | Controladores disponibles
-###############################################################################
+# Políticas de red base de Flux (si las tienes activadas)
+- name: "GitOps | Render & apply CiliumNetworkPolicy (Flux baseline)"
+  when: gitops_enable_flux_netpol | bool
+  vars:
+    cnp_templates:
+      - cnp-flux-allow-intra-namespace.yaml.j2
+      - cnp-flux-allow-dns.yaml.j2
+      - cnp-flux-allow-egress-https.yaml.j2
+      - cnp-flux-allow-kustomize-to-source.yaml.j2
+  loop: "{{ cnp_templates }}"
+  loop_control:
+    loop_var: cnp_tmpl
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', cnp_tmpl) | from_yaml }}"
+  environment:
+    KUBECONFIG: "{{ gitops_kubeconfig }}"
+
+# Espera a que todos los controladores estén disponibles
 - name: "Ready | Wait for controllers to become available"
   vars:
     gitops_controllers:

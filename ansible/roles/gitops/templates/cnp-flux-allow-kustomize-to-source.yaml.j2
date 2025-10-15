@@ -1,0 +1,17 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: flux-allow-kustomize-to-source
+  namespace: {{ gitops_namespace }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app: source-controller
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: kustomize-controller
+      toPorts:
+        - ports:
+            - port: "80"
+              protocol: TCP

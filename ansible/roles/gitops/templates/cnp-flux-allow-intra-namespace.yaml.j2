@@ -1,0 +1,15 @@
+apiVersion: "cilium.io/v2"
+kind: CiliumNetworkPolicy
+metadata:
+  name: flux-allow-intra-namespace
+  namespace: {{ gitops_namespace }}
+spec:
+  endpointSelector: {}  # todos los pods en este ns
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            "kubernetes.io/metadata.name": {{ gitops_namespace }}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            "kubernetes.io/metadata.name": {{ gitops_namespace }}
