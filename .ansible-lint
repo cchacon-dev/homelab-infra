@@ -16,3 +16,4 @@ exclude_paths:
   - node_modules/
   - .git/
   - ansible/inventory/prod/group_vars/all/vault.yml
+  - "**/molecule/**"
