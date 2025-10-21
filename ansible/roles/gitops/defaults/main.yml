@@ -1,24 +1,27 @@
 ---
+# Version pinning for reproducibility. Bump only via PRs.
 gitops_flux_version: "v2.7.2"
-gitops_namespace: "flux-system"
 gitops_kubeconfig: "/etc/rancher/k3s/k3s.yaml"
+
 gitops_release_base: "https://github.com/fluxcd/flux2/releases/download"
+gitops_install_manifest_path: "/tmp/flux-install.yaml"
 
-gitops_install_flux_cli: false
-gitops_flux_cli_os: "linux"
-gitops_flux_cli_arch: "amd64"
+# === GitHub App auth (HTTPS + provider: github) ===
+gitops_repo_url: "https://github.com/cchacon-dev/homelab-gitops"
+gitops_repo_branch: "main"
+gitops_repo_cluster_path: "clusters/homelab"
 
-gitops_enable_flux_netpol: true
-gitops_enable_flux_probe_patches: true
-gitops_enable_flux_recreate_strategy: true
-
-gitops_flux_components_wait:
+# Controllers we actually want today (aligned with your repo).
+# Do NOT list image-* unless you also manage their CRDs/manifests.
+gitops_controllers:
   - source-controller
   - kustomize-controller
   - helm-controller
   - notification-controller
-  - image-automation-controller
-  - image-reflector-controller
 
-gitops_install_manifest_path: "/tmp/flux-install.yaml"
-gitops_cnp_include_world: true
+gitops_namespace: flux-system
+gitops_pull_secret_name: flux-system
+
+gitops_github_app_id_internal: "{{ gitops_github_app_id }}"
+gitops_github_installation_id_internal: "{{ gitops_github_installation_id }}"
+gitops_github_private_key_pem_internal: "{{ gitops_github_app_private_key }}"

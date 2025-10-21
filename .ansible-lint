@@ -1,10 +1,18 @@
 ---
-warn_list:
-  - experimental
+profile: production
+
 skip_list:
-  - fqcn-builtins
+  - package-latest
+
+warn_list:
+  - risky-shell-pipe
+  - no-relative-paths
+
 exclude_paths:
-  - .git/
   - .venv/
-  - molecule/
-  - ansible/inventory/**/group_vars/**/vault.yml
+  - "**/.venv/**"
+  - "**/site-packages/**"
+  - "**/.tox/**"
+  - node_modules/
+  - .git/
+  - ansible/inventory/prod/group_vars/all/vault.yml

@@ -1,5 +1,5 @@
 ---
-- name: Converge base role
+- name: Base | Converge base role
   hosts: all
   gather_facts: false        # <— clave
   become: false
@@ -7,14 +7,14 @@
     ansible_remote_tmp: /var/tmp
 
   pre_tasks:
-    - name: "Ensure /var/tmp is present and writable (raw)"
+    - name: Base | "Ensure /var/tmp is present and writable (raw)"
       ansible.builtin.raw: "mkdir -p /var/tmp && chmod 1777 /var/tmp"
       changed_when: false
 
-    - name: "Gather facts now"
+    - name: Base | "Gather facts now"
       ansible.builtin.setup:
 
-    - name: Ensure tzdata present on Debian/Ubuntu
+    - name: Base | Ensure tzdata present on Debian/Ubuntu
       ansible.builtin.apt:
         name: tzdata
         state: present
@@ -25,7 +25,7 @@
         TZ: Etc/UTC
       when: ansible_os_family == "Debian"
 
-    - name: Ensure base utilities on Debian/Ubuntu
+    - name: Base | Ensure base utilities on Debian/Ubuntu
       ansible.builtin.apt:
         name:
           - sudo
@@ -38,14 +38,14 @@
         DEBIAN_FRONTEND: noninteractive
       when: ansible_os_family == "Debian"
 
-    - name: Ensure ansible user exists in containers
+    - name: Base | Ensure ansible user exists in containers
       ansible.builtin.user:
         name: ansible
         shell: /bin/bash
         create_home: true
       when: (ansible_virtualization_type | default('')) in ['docker', 'container', 'lxc']
 
-    - name: Seed authorized_keys in containers
+    - name: Base | Seed authorized_keys in containers
       ansible.posix.authorized_key:
         user: ansible
         key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForMolecule ansible@molecule"

@@ -1,5 +1,5 @@
 ---
-- name: Verify base role
+- name: Base | Verify base role
   hosts: all
   gather_facts: true
   become: true
@@ -8,18 +8,18 @@
     expected_timezone: "Etc/UTC"
 
   tasks:
-    - name: "Check ansible user exists"
+    - name: Base | "Check ansible user exists"
       ansible.builtin.command: id ansible
       register: id_out
       changed_when: false
       failed_when: id_out.rc != 0
 
-    - name: "Stat ansible .ssh directory"
+    - name: Base | "Stat ansible .ssh directory"
       ansible.builtin.stat:
         path: /home/ansible/.ssh
       register: ssh_dir
 
-    - name: "Assert .ssh directory is secure"
+    - name: Base | "Assert .ssh directory is secure"
       ansible.builtin.assert:
         that:
           - ssh_dir.stat.exists
@@ -28,12 +28,12 @@
           - ssh_dir.stat.gr_name == 'ansible'
           - ssh_dir.stat.mode | int(base=8) == 0o700
 
-    - name: "Stat authorized_keys"
+    - name: Base | "Stat authorized_keys"
       ansible.builtin.stat:
         path: /home/ansible/.ssh/authorized_keys
       register: authkeys
 
-    - name: "Assert authorized_keys is secure"
+    - name: Base | "Assert authorized_keys is secure"
       ansible.builtin.assert:
         that:
           - authkeys.stat.exists
@@ -43,7 +43,7 @@
           - authkeys.stat.mode | int(base=8) == 0o600
           - authkeys.stat.size > 0
 
-    - name: "Read /etc/timezone on Debian"
+    - name: Base | "Read /etc/timezone on Debian"
       ansible.builtin.slurp:
         path: /etc/timezone
       register: tzfile
@@ -51,26 +51,26 @@
       changed_when: false
       failed_when: false
 
-    - name: "Assert timezone on Debian"
+    - name: Base | "Assert timezone on Debian"
       ansible.builtin.assert:
         that: "(tzfile.content | b64decode | trim) == expected_timezone"
       when: ansible_os_family == "Debian" and tzfile is defined and tzfile.content is defined
 
-    - name: "Read /etc/localtime symlink"
+    - name: Base | "Read /etc/localtime symlink"
       ansible.builtin.command: readlink -f /etc/localtime
       register: tzlink
       changed_when: false
       failed_when: false
 
-    - name: "Assert timezone via symlink"
+    - name: Base | "Assert timezone via symlink"
       ansible.builtin.assert:
         that: "expected_timezone.split('/')[-1] in (tzlink.stdout | default(''))"
       when: tzlink.stdout is defined and tzlink.stdout != ""
 
-    - name: "Check PasswordAuthentication is disabled"
+    - name: Base | "Check PasswordAuthentication is disabled"
       when: (ansible_virtualization_type | default('')) not in ['docker', 'container', 'lxc']
       block:
-        - name: "Locate sshd binary"
+        - name: Base | "Locate sshd binary"
           ansible.builtin.shell: |
             set -o pipefail
             command -v sshd || command -v /usr/sbin/sshd || true
@@ -79,19 +79,19 @@
           register: sshd_bin
           changed_when: false
 
-        - name: "Run sshd -T"
+        - name: Base | "Run sshd -T"
           ansible.builtin.command: "{{ sshd_bin.stdout }} -T"
           register: sshd_t
           changed_when: false
           failed_when: false
           when: sshd_bin.stdout != ""
 
-        - name: "Assert PasswordAuthentication no (sshd -T)"
+        - name: Base | "Assert PasswordAuthentication no (sshd -T)"
           ansible.builtin.assert:
             that: "'passwordauthentication no' in (sshd_t.stdout | default(''))"
           when: sshd_bin.stdout != "" and (sshd_t.stdout | default('')) != ""
 
-        - name: "Fallback grep sshd_config"
+        - name: Base | "Fallback grep sshd_config"
           ansible.builtin.command: grep -E '^[[:space:]]*PasswordAuthentication[[:space:]]+no' /etc/ssh/sshd_config
           register: grep_pa
           changed_when: false

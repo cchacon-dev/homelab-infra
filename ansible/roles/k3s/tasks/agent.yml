@@ -1,44 +1,32 @@
 ---
-# Ensure the API is reachable before trying to join
-- name: Wait for TCP 6443 on control-plane from workers
+# Join workers to the K3s server automatically by reading the server's node-token.
+# This avoids relying on an external secret variable and is safe/idempotent.
+
+- name: K3s | Wait for TCP 6443 on control-plane from workers
   ansible.builtin.wait_for:
     host: "{{ k3s_server_ip }}"
     port: 6443
-    timeout: 60
-  when: "'k3s_workers' in group_names"
-  changed_when: false
-  tags: [k3s]
-
-# Detect legacy/invalid flag in existing unit (created by a previous run)
-- name: Check if k3s-agent service file contains invalid flag
-  ansible.builtin.command:
-    cmd: grep -q -- '--flannel-backend' /etc/systemd/system/k3s-agent.service
-  register: k3s_agent_flag_check
-  failed_when: false
+    timeout: 120
   changed_when: false
   when: "'k3s_workers' in group_names"
   tags: [k3s]
 
-# Cleanly uninstall the old agent if the invalid flag is present
-- name: Uninstall old k3s-agent with invalid flag
-  ansible.builtin.command:
-    cmd: /usr/local/bin/k3s-agent-uninstall.sh
-  when:
-    - "'k3s_workers' in group_names"
-    - k3s_agent_flag_check.rc == 0
-  changed_when: true
-  tags: [k3s]
-
-# Make sure systemd state is fresh after uninstall
-- name: Daemon-reload after potential uninstall
-  ansible.builtin.systemd:
-    daemon_reload: true
+- name: K3s | Read K3s server node-token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_token_slurp
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  run_once: true
   when: "'k3s_workers' in group_names"
-  changed_when: false
   tags: [k3s]
 
-# Download the official installer
-- name: Download K3s installer script (agent)
+- name: K3s | Set fact with K3S_TOKEN
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ (k3s_token_slurp.content | b64decode).strip() }}"
+  when: "'k3s_workers' in group_names"
+  tags: [k3s]
+
+- name: K3s | Download K3s installer script (agent)
   ansible.builtin.get_url:
     url: "{{ k3s_install_script_url }}"
     dest: "{{ k3s_install_script_path }}"
@@ -46,22 +34,20 @@
   when: "'k3s_workers' in group_names"
   tags: [k3s]
 
-# Install the agent WITHOUT any flannel flags
-- name: Install K3s agent (join to server)
+- name: K3s | Install K3s agent (join to server)
   ansible.builtin.command: >
     sh {{ k3s_install_script_path }}
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_channel_version }}"
-    INSTALL_K3S_SKIP_ENABLE: "false"
     K3S_URL: "{{ k3s_server_url }}"
-    K3S_TOKEN: "{{ vault_k3s_token }}"
+    K3S_TOKEN: "{{ k3s_node_token }}"
     INSTALL_K3S_EXEC: agent
   args:
     creates: /etc/systemd/system/k3s-agent.service
   when: "'k3s_workers' in group_names"
   tags: [k3s]
 
-- name: Ensure K3s agent service is enabled and running
+- name: K3s | Ensure K3s agent service is enabled and running
   ansible.builtin.systemd:
     name: k3s-agent
     enabled: true

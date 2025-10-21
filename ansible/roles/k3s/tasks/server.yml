@@ -1,12 +1,12 @@
 ---
-- name: Download K3s installer script (server)
+- name: K3s | Download K3s installer script (server)
   ansible.builtin.get_url:
     url: "{{ k3s_install_script_url }}"
     dest: "{{ k3s_install_script_path }}"
     mode: "0755"
   tags: [k3s]
 
-- name: Install K3s server (no flannel, no kube-proxy, no traefik)
+- name: K3s | Install K3s server (no flannel, no kube-proxy, no traefik)
   ansible.builtin.command: >
     sh {{ k3s_install_script_path }}
   environment:
@@ -24,14 +24,14 @@
     creates: /etc/systemd/system/k3s.service
   tags: [k3s]
 
-- name: Ensure K3s server service is enabled and running
+- name: K3s | Ensure K3s server service is enabled and running
   ansible.builtin.systemd:
     name: k3s
     enabled: true
     state: started
   tags: [k3s]
 
-- name: Wait for Kubernetes API to be ready (readyz)
+- name: K3s | Wait for Kubernetes API to be ready (readyz)
   ansible.builtin.command: >
     /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get --raw=/readyz
   register: k3s_readyz

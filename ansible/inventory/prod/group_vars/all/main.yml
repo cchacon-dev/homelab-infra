@@ -40,3 +40,30 @@ base_k8s_sysctl:
 
 base_enable_unattended_upgrades: false
 base_manage_ufw: false
+
+k3s_install_script_url: "https://get.k3s.io"
+k3s_install_script_path: "/usr/local/bin/install-k3s.sh"
+
+k3s_channel_version: "{{ k3s_version }}"
+
+gitops_flux_version: "v2.7.2"
+gitops_release_base: "https://github.com/fluxcd/flux2/releases/download"
+gitops_namespace: "flux-system"
+
+gitops_kubeconfig_remote: "/etc/rancher/k3s/k3s.yaml"
+gitops_kubeconfig_local: "/tmp/k3s_cp01_kubeconfig.yaml"
+
+gitops_repo_url: "https://github.com/cchacon-dev/homelab-gitops.git"
+gitops_repo_branch: "main"
+gitops_repo_cluster_path: "clusters/homelab"
+
+gitops_auth_method: "github_app"
+gitops_github_app_id: "{{ gitops_github_app_id }}"
+gitops_github_installation_id: "{{ gitops_github_installation_id }}"
+gitops_github_app_private_key: "{{ gitops_github_app_private_key }}"
+
+gitops_controllers:
+  - source-controller
+  - kustomize-controller
+  - helm-controller
+  - notification-controller

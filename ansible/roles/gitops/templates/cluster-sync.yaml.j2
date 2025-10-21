@@ -1,0 +1,27 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flux-system
+  namespace: {{ gitops_namespace }}
+spec:
+  interval: 1m
+  url: "{{ gitops_repo_url }}"            # e.g. https://github.com/cchacon-dev/homelab-gitops.git
+  ref:
+    branch: "{{ gitops_repo_branch | default('main') }}"
+  provider: github
+  secretRef:
+    name: "{{ gitops_pull_secret_name | default('flux-system') }}"
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flux-system
+  namespace: {{ gitops_namespace }}
+spec:
+  interval: 1m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: "{{ gitops_repo_cluster_path | default('./clusters/homelab') }}"
+  prune: true
+  wait: true

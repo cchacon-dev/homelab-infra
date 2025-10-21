@@ -1,30 +1,42 @@
 ---
-- name: Base config on all nodes
+# Play 1: Base config on all nodes
+- name: Base config
   hosts: all
   become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
   roles:
     - role: base
-      tags:
-        - base
-        - packages
-        - time
-        - k8s
-        - ssh
-        - gitops
-        - firewall
-    - role: k3s
-      tags:
-        - k3s
+      tags: [base, packages, time, ssh, firewall]
 
+# Play 2: Install K3s server on control-plane
+- name: Install K3s server
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  roles:
+    - role: k3s
+      tags: [k3s]
+
+# Play 3: Join workers to the cluster
+- name: Install K3s agents
+  hosts: k3s_workers
+  become: true
+  gather_facts: false
+  roles:
+    - role: k3s
+      tags: [k3s]
+
+# Play 4: Install Cilium (CNI)
 - name: Install Cilium (CNI)
   hosts: k3s_server
   become: true
   gather_facts: false
   roles:
     - role: cilium
-      tags:
-        - cilium
+      tags: [cilium]
 
+# Play 5: Install FluxCD and connect to Git
 - name: Install FluxCD (GitOps)
   hosts: k3s_server
   become: true

@@ -1,8 +1,8 @@
 ---
-- name: Install K3s server on control-plane
+- name: K3s | Install K3s server on control-plane
   ansible.builtin.import_tasks: server.yml
   when: "'k3s_server' in group_names"
 
-- name: Install K3s agent on workers
+- name: K3s | Install K3s agent on workers
   ansible.builtin.import_tasks: agent.yml
   when: "'k3s_workers' in group_names"

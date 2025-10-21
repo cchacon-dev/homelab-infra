@@ -9,7 +9,7 @@ driver:
   name: docker
 
 platforms:
-  - name: instance-ubuntu
+  - name: Base | Instance-ubuntu
     image: "geerlingguy/docker-ubuntu2404-ansible:latest"
     pre_build_image: true
     command: sleep infinity

@@ -2,22 +2,28 @@
 extends: default
 
 ignore: |
-  .git
-  .venv
-  .tox
-  *.retry
-  ansible/inventory/**/group_vars/**/vault.yml
+  .git/
+  .venv/
+  **/.venv/**
+  **/site-packages/**
+  .tox/
+  node_modules/
+  ansible/inventory/prod/group_vars/all/vault.yml
 
 rules:
-  braces:
-    max-spaces-inside: 1
   comments:
     min-spaces-from-content: 1
-  comments-indentation: disable
+  comments-indentation: false
+  braces:
+    max-spaces-inside: 1
   octal-values:
     forbid-implicit-octal: true
     forbid-explicit-octal: true
   line-length:
-    max: 120
+    max: 140
     allow-non-breakable-words: true
-    allow-non-breakable-inline-mappings: true
+  truthy:
+    allowed-values: ["true", "false"]
+  indentation:
+    spaces: 2
+    indent-sequences: consistent

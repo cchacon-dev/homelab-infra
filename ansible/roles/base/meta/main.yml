@@ -1,17 +1,15 @@
 ---
 galaxy_info:
-  namespace: homelab
   role_name: base
-  author: cchacon-dev
-  description: Base configuration role for homelab nodes
+  author: Carlos Chacón
+  description: Base role for homelab nodes
   license: MIT
   min_ansible_version: "2.15"
-
   platforms:
     - name: Ubuntu
-      versions:
-        - jammy
-        - noble
+      versions: [focal, jammy]
+    - name: Debian
+      versions: [bullseye, bookworm]
 
   galaxy_tags:
     - homelab

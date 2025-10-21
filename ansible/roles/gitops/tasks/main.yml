@@ -1,218 +1,190 @@
 ---
-# === Ensure namespace exists ===
-- name: "GitOps | Ensure namespace '{{ gitops_namespace }}'"
-  kubernetes.core.k8s:
-    api_version: v1
-    kind: Namespace
-    name: "{{ gitops_namespace }}"
-    state: present
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
+# roles/gitops/tasks/main.yml
+#
+# Purpose (enterprise, idempotent):
+# - Install Flux controllers from a pinned upstream manifest.
+# - Never mutate Deployment selectors (immutable) or re-apply partial specs.
+# - Authenticate to the Git repo via GitHub App (HTTPS + provider: github).
+# - Create GitRepository/Kustomization for cluster sync.
+# - Run only the controllers we actually want today; scale down any others.
+#
+# Assumptions:
+# - kubeconfig is present on the target host (e.g., /etc/rancher/k3s/k3s.yaml).
+# - Vault vars are mapped in role defaults to role-scoped vars:
+#     gitops_github_app_id_internal
+#     gitops_github_installation_id_internal
+#     gitops_github_private_key_pem_internal
+# - Role defaults also define:
+#     gitops_flux_version, gitops_namespace, gitops_kubeconfig,
+#     gitops_release_base, gitops_install_manifest_path,
+#     gitops_repo_url, gitops_repo_branch, gitops_repo_cluster_path,
+#     gitops_pull_secret_name, gitops_controllers (optional override)
 
-# === Vars: compute fromEntities ===
-- name: "Vars | Compute CNP fromEntities"
-  ansible.builtin.set_fact:
-    gitops_cnp_from_entities: >-
-      {{
-        ['host', 'remote-node', 'cluster']
-        + (gitops_cnp_include_world | bool | ternary(['world'], []))
-      }}
-  tags: [gitops]
-
-# === NetPol: permitir probes kubelet a 9440 y 9090 (temporal) ===
-- name: "NetPol | Ensure probes are allowed towards 9440/tcp and 9090/tcp"
+# ------------------------------------------------------------
+# Ensure namespace exists with proper PodSecurity labels (fix for K3s 1.29+)
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Ensure namespace with privileged PodSecurity label"
   kubernetes.core.k8s:
     state: present
     apply: true
+    kubeconfig: "{{ gitops_kubeconfig }}"
     definition:
-      apiVersion: cilium.io/v2
-      kind: CiliumNetworkPolicy
+      apiVersion: v1
+      kind: Namespace
       metadata:
-        name: flux-allow-kubelet-probes
-        namespace: "{{ gitops_namespace }}"
+        name: "{{ gitops_namespace }}"
         labels:
-          app.kubernetes.io/managed-by: ansible
-      spec:
-        endpointSelector: {}
-        ingress:
-          - fromEntities: "{{ gitops_cnp_from_entities }}"
-            toPorts:
-              - ports:
-                  - port: "9440"
-                    protocol: TCP
-                  - port: "9090"
-                    protocol: TCP
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged
+  delegate_to: "{{ inventory_hostname }}"
 
-# === Patch: normalize controller probes to use 9440/healthz ===
-- name: "Patch | Normalize controller probes"
-  vars:
-    gitops_controllers:
+# ------------------------------------------------------------
+# Guardrails: compute allowed/effective controller sets up-front
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Define controller sets"
+  ansible.builtin.set_fact:
+    gitops_all_known_controllers:
       - source-controller
       - kustomize-controller
       - helm-controller
       - notification-controller
-      - image-automation-controller
       - image-reflector-controller
-  loop: "{{ gitops_controllers }}"
-  kubernetes.core.k8s_json_patch:
-    kind: Deployment
-    namespace: "{{ gitops_namespace }}"
-    name: "{{ item }}"
-    patch:
-      - op: replace
-        path: /spec/template/spec/containers/0/livenessProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 12
-      - op: replace
-        path: /spec/template/spec/containers/0/readinessProbe
-        value:
-          httpGet:
-            path: /readyz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 12
-      - op: add
-        path: /spec/template/spec/containers/0/startupProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 5
-          failureThreshold: 60
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
-
-# === Patch: source-controller specific timeouts ===
-- name: "Patch | Source-controller probe overrides"
-  kubernetes.core.k8s_json_patch:
-    kind: Deployment
-    namespace: "{{ gitops_namespace }}"
-    name: source-controller
-    patch:
-      - op: replace
-        path: /spec/template/spec/containers/0/readinessProbe
-        value:
-          httpGet:
-            path: /readyz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 30
-      - op: replace
-        path: /spec/template/spec/containers/0/livenessProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 30
-          periodSeconds: 10
-          timeoutSeconds: 10
-          failureThreshold: 12
-      - op: replace
-        path: /spec/template/spec/containers/0/startupProbe
-        value:
-          httpGet:
-            path: /healthz
-            port: healthz
-            scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 5
-          timeoutSeconds: 5
-          failureThreshold: 60
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
-
-# === Patch: force Recreate strategy for all controllers ===
-- name: "Patch | Use Recreate strategy to avoid duplicate pods"
-  vars:
-    gitops_controllers:
+      - image-automation-controller
+    # Allowed today (keep aligned with your repo)
+    gitops_allowed_controllers:
       - source-controller
       - kustomize-controller
       - helm-controller
       - notification-controller
-      - image-automation-controller
-      - image-reflector-controller
-  loop: "{{ gitops_controllers }}"
-  kubernetes.core.k8s_json_patch:
-    kind: Deployment
-    namespace: "{{ gitops_namespace }}"
-    name: "{{ item }}"
-    patch:
-      - op: replace
-        path: /spec/strategy
-        value:
-          type: Recreate
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
 
-# === Apply CiliumNetworkPolicies baseline (Flux internal) ===
-- name: "GitOps | Render & apply CiliumNetworkPolicy (Flux baseline)"
-  when: gitops_enable_flux_netpol | bool
-  vars:
-    cnp_templates:
-      - cnp-flux-allow-intra-namespace.yaml.j2
-      - cnp-flux-allow-dns.yaml.j2
-      - cnp-flux-allow-egress-https.yaml.j2
-      - cnp-flux-allow-kustomize-to-source.yaml.j2  # must allow port 80 and 9440
-  loop: "{{ cnp_templates }}"
-  loop_control:
-    loop_var: cnp_tmpl
+- name: Gitops | "Flux | Compute effective controllers"
+  ansible.builtin.set_fact:
+    # If gitops_controllers is defined, intersect with allowed; else use allowed
+    gitops_controllers_effective: >-
+      {{ (gitops_controllers | default(gitops_allowed_controllers))
+         | list
+         | intersect(gitops_allowed_controllers) }}
+
+- name: Gitops | "Flux | Compute undesired controllers"
+  ansible.builtin.set_fact:
+    gitops_controllers_undesired: >-
+      {{ gitops_all_known_controllers
+         | difference(gitops_controllers_effective) }}
+
+- name: Gitops | "Flux | Assert that no disallowed controllers were requested"
+  ansible.builtin.assert:
+    that:
+      - (gitops_controllers | default([])) | difference(gitops_allowed_controllers) | length == 0
+    fail_msg: >
+      'gitops_controllers' contains unsupported controllers for this cluster:
+      {{ (gitops_controllers | default([])) | difference(gitops_allowed_controllers) }}.
+      Remove them or enable image automation stack & CRDs explicitly before proceeding.
+  when: gitops_controllers is defined
+
+# ------------------------------------------------------------
+# Install Flux from pinned upstream manifest (safe & idempotent)
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Download pinned install manifest {{ gitops_flux_version }}"
+  ansible.builtin.get_url:
+    url: "{{ gitops_release_base }}/{{ gitops_flux_version }}/install.yaml"
+    dest: "{{ gitops_install_manifest_path }}"
+    mode: "0644"
+  delegate_to: "{{ inventory_hostname }}"
+
+- name: Gitops | "Flux | Install/Upgrade controllers (official manifest)"
   kubernetes.core.k8s:
     state: present
-    definition: "{{ lookup('template', cnp_tmpl) | from_yaml }}"
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
+    apply: true
+    kubeconfig: "{{ gitops_kubeconfig }}"        # e.g. /etc/rancher/k3s/k3s.yaml
+    src: "{{ gitops_install_manifest_path }}"    # remote path; avoid lookup('file', ...)
+  delegate_to: "{{ inventory_hostname }}"
 
-# === Wait for all controllers to become Ready ===
-- name: "Ready | Wait for controllers to become available"
+- name: Gitops | "Flux | Ensure Kustomization infra (wait:false + timeout)"
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'kustomization-infra.yaml.j2') | from_yaml }}"
+  tags: ['gitops']
+
+# ------------------------------------------------------------
+# Pragmatic prune: scale down any controller not in the effective set
+# (do NOT delete blindly; keep upgrades safe and avoid touching selectors)
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Scale down controllers we do NOT want today"
+  loop: "{{ gitops_controllers_undesired }}"
+  when: gitops_controllers_undesired | length > 0
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    namespace: "{{ gitops_namespace }}"
+    kind: Deployment
+    name: "{{ item }}"
+    patch:
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  register: gitops_scale_patch
+  failed_when: >
+    gitops_scale_patch is failed and
+    ('not found' not in (gitops_scale_patch.msg | default('') | lower))
+  delegate_to: "{{ inventory_hostname }}"
+
+# ------------------------------------------------------------
+# Wait until desired controllers are actually Available
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Wait for desired controllers to be Available"
   vars:
-    gitops_controllers:
-      - source-controller
-      - kustomize-controller
-      - helm-controller
-      - notification-controller
-      - image-automation-controller
-      - image-reflector-controller
-  loop: "{{ gitops_controllers }}"
+    gitops_dep_name: "{{ item }}"
+  loop: "{{ gitops_controllers_effective }}"
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ gitops_namespace }}"
-    name: "{{ item }}"
-  register: gitops_wait_deploy
+    name: "{{ gitops_dep_name }}"
+    kubeconfig: "{{ gitops_kubeconfig }}"
+  register: gitops_dep_info
+  retries: 60
+  delay: 5
   until: >
-    (gitops_wait_deploy.resources | length) > 0 and
-    (
-      (gitops_wait_deploy.resources[0].status.conditions | default([]) |
-       selectattr('type','equalto','Available') | map(attribute='status') | list) | first
-    ) == 'True'
-  retries: 40
-  delay: 10
-  changed_when: false
-  environment:
-    KUBECONFIG: "{{ gitops_kubeconfig }}"
-  tags: [gitops]
+    (gitops_dep_info.resources | length) > 0 and
+    (gitops_dep_info.resources[0].status.availableReplicas | default(0) | int) >= 1
+  delegate_to: "{{ inventory_hostname }}"
+
+# ------------------------------------------------------------
+# GitHub App Secret + cluster sync (GitRepository + Kustomization)
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Apply GitHub App secret (Git provider auth)"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    definition: "{{ lookup('template', 'secret-githubapp.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ inventory_hostname }}"
+
+- name: Gitops | "Flux | Apply GitRepository + Kustomization (cluster sync)"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    definition: "{{ lookup('template', 'cluster-sync.yaml.j2') | from_yaml_all }}"
+  delegate_to: "{{ inventory_hostname }}"
+
+# ------------------------------------------------------------
+# Safe reconcile "kick" via annotations (idempotent)
+# ------------------------------------------------------------
+- name: Gitops | "Flux | Kick source reconcile (idempotent via annotation)"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig={{ gitops_kubeconfig }} -n {{ gitops_namespace }}
+      annotate --overwrite gitrepository/flux-system
+      reconcile.fluxcd.io/requestedAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  changed_when: true
+  delegate_to: "{{ inventory_hostname }}"
+
+- name: Gitops | "Flux | Kick kustomization reconcile (idempotent via annotation)"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig={{ gitops_kubeconfig }} -n {{ gitops_namespace }}
+      annotate --overwrite kustomization/flux-system
+      reconcile.fluxcd.io/requestedAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  changed_when: true
+  delegate_to: "{{ inventory_hostname }}"
