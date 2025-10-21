@@ -1,190 +1,155 @@
 ---
-# roles/gitops/tasks/main.yml
-#
-# Purpose (enterprise, idempotent):
-# - Install Flux controllers from a pinned upstream manifest.
-# - Never mutate Deployment selectors (immutable) or re-apply partial specs.
-# - Authenticate to the Git repo via GitHub App (HTTPS + provider: github).
-# - Create GitRepository/Kustomization for cluster sync.
-# - Run only the controllers we actually want today; scale down any others.
-#
-# Assumptions:
-# - kubeconfig is present on the target host (e.g., /etc/rancher/k3s/k3s.yaml).
-# - Vault vars are mapped in role defaults to role-scoped vars:
-#     gitops_github_app_id_internal
-#     gitops_github_installation_id_internal
-#     gitops_github_private_key_pem_internal
-# - Role defaults also define:
-#     gitops_flux_version, gitops_namespace, gitops_kubeconfig,
-#     gitops_release_base, gitops_install_manifest_path,
-#     gitops_repo_url, gitops_repo_branch, gitops_repo_cluster_path,
-#     gitops_pull_secret_name, gitops_controllers (optional override)
+# Role: gitops
+# Purpose: Manage Flux authentication via GitHub App (Secret) and ensure GitRepository references it.
+# Notes:
+#   - This role talks to the cluster from the Ansible controller (localhost).
+#   - Requires a valid kubeconfig file on the Ansible controller.
+#   - All operations are idempotent; they will NOOP if already in the desired state.
 
-# ------------------------------------------------------------
-# Ensure namespace exists with proper PodSecurity labels (fix for K3s 1.29+)
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Ensure namespace with privileged PodSecurity label"
+# Expected variables (set in defaults/main.yml or group_vars):
+#   gitops_namespace: "flux-system"
+#   gitops_flux_gitrepo_name: "flux-system"
+#   gitops_githubapp_secret_name: "homelab-ghapp"
+#   gitops_kubeconfig: path to kubeconfig on controller (default picks $KUBECONFIG or ~/.kube/config)
+#
+# Expected secrets (put in Vault or group_vars):
+#   github_app_id: "123456"
+#   github_app_installation_id: "9876543"
+#   github_app_private_key_pem: |-
+#     -----BEGIN RSA PRIVATE KEY-----
+#     ...
+#     -----END RSA PRIVATE KEY-----
+#
+# Execution:
+#   ansible-playbook ansible/playbooks/site.yml --tags gitops -l cp01-homelab
+#
+# Verification:
+#   kubectl -n flux-system get secret homelab-ghapp -o json | jq -r '.data | keys'
+#   kubectl -n flux-system get gitrepository flux-system -o yaml | yq '.spec.secretRef'
+
+- name: Gitops | Assert kubeconfig is provided
+  ansible.builtin.assert:
+    that:
+      - gitops_kubeconfig is defined
+      - gitops_kubeconfig | length > 0
+    fail_msg: >-
+      'gitops_kubeconfig' is not defined or empty. Provide a valid kubeconfig path
+      (e.g. set KUBECONFIG env var, or define gitops_kubeconfig in group_vars/defaults).
+    success_msg: Kubeconfig variable present.
+
+- name: Gitops | Check kubeconfig file exists on controller
+  ansible.builtin.stat:
+    path: "{{ gitops_kubeconfig }}"
+  register: gitops_kubeconfig_stat
+  delegate_to: localhost
+  run_once: true
+
+- name: Gitops | Fail early if kubeconfig is missing
+  ansible.builtin.fail:
+    msg: >-
+      kubeconfig not found at '{{ gitops_kubeconfig }}'.
+      Ensure the file exists on the Ansible controller and is readable.
+  when: not gitops_kubeconfig_stat.stat.exists
+  delegate_to: localhost
+  run_once: true
+
+- name: Gitops | Ensure namespace exists
+  vars:
+    ansible_python_interpreter: "{{ gitops_python_interpreter }}"
   kubernetes.core.k8s:
-    state: present
-    apply: true
     kubeconfig: "{{ gitops_kubeconfig }}"
+    state: present
     definition:
       apiVersion: v1
       kind: Namespace
       metadata:
         name: "{{ gitops_namespace }}"
-        labels:
-          pod-security.kubernetes.io/enforce: privileged
-          pod-security.kubernetes.io/audit: privileged
-          pod-security.kubernetes.io/warn: privileged
-  delegate_to: "{{ inventory_hostname }}"
-
-# ------------------------------------------------------------
-# Guardrails: compute allowed/effective controller sets up-front
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Define controller sets"
-  ansible.builtin.set_fact:
-    gitops_all_known_controllers:
-      - source-controller
-      - kustomize-controller
-      - helm-controller
-      - notification-controller
-      - image-reflector-controller
-      - image-automation-controller
-    # Allowed today (keep aligned with your repo)
-    gitops_allowed_controllers:
-      - source-controller
-      - kustomize-controller
-      - helm-controller
-      - notification-controller
-
-- name: Gitops | "Flux | Compute effective controllers"
-  ansible.builtin.set_fact:
-    # If gitops_controllers is defined, intersect with allowed; else use allowed
-    gitops_controllers_effective: >-
-      {{ (gitops_controllers | default(gitops_allowed_controllers))
-         | list
-         | intersect(gitops_allowed_controllers) }}
-
-- name: Gitops | "Flux | Compute undesired controllers"
-  ansible.builtin.set_fact:
-    gitops_controllers_undesired: >-
-      {{ gitops_all_known_controllers
-         | difference(gitops_controllers_effective) }}
-
-- name: Gitops | "Flux | Assert that no disallowed controllers were requested"
-  ansible.builtin.assert:
-    that:
-      - (gitops_controllers | default([])) | difference(gitops_allowed_controllers) | length == 0
-    fail_msg: >
-      'gitops_controllers' contains unsupported controllers for this cluster:
-      {{ (gitops_controllers | default([])) | difference(gitops_allowed_controllers) }}.
-      Remove them or enable image automation stack & CRDs explicitly before proceeding.
-  when: gitops_controllers is defined
-
-# ------------------------------------------------------------
-# Install Flux from pinned upstream manifest (safe & idempotent)
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Download pinned install manifest {{ gitops_flux_version }}"
-  ansible.builtin.get_url:
-    url: "{{ gitops_release_base }}/{{ gitops_flux_version }}/install.yaml"
-    dest: "{{ gitops_install_manifest_path }}"
-    mode: "0644"
-  delegate_to: "{{ inventory_hostname }}"
-
-- name: Gitops | "Flux | Install/Upgrade controllers (official manifest)"
-  kubernetes.core.k8s:
-    state: present
-    apply: true
-    kubeconfig: "{{ gitops_kubeconfig }}"        # e.g. /etc/rancher/k3s/k3s.yaml
-    src: "{{ gitops_install_manifest_path }}"    # remote path; avoid lookup('file', ...)
-  delegate_to: "{{ inventory_hostname }}"
-
-- name: Gitops | "Flux | Ensure Kustomization infra (wait:false + timeout)"
-  kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('template', 'kustomization-infra.yaml.j2') | from_yaml }}"
+  delegate_to: localhost
+  run_once: true
   tags: ['gitops']
 
-# ------------------------------------------------------------
-# Pragmatic prune: scale down any controller not in the effective set
-# (do NOT delete blindly; keep upgrades safe and avoid touching selectors)
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Scale down controllers we do NOT want today"
-  loop: "{{ gitops_controllers_undesired }}"
-  when: gitops_controllers_undesired | length > 0
+- name: Gitops | Ensure GitHub App Secret (camelCase keys)
+  vars:
+    ansible_python_interpreter: "{{ gitops_python_interpreter }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('template', 'secret-githubapp.yaml.j2') | from_yaml }}"
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']
+
+- name: Gitops | Patch GitRepository to reference Secret (spec.secretRef)
+  vars:
+    ansible_python_interpreter: "{{ gitops_python_interpreter }}"
   kubernetes.core.k8s_json_patch:
     kubeconfig: "{{ gitops_kubeconfig }}"
+    api_version: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
     namespace: "{{ gitops_namespace }}"
-    kind: Deployment
-    name: "{{ item }}"
+    name: "{{ gitops_flux_gitrepo_name }}"
     patch:
-      - op: replace
-        path: /spec/replicas
-        value: 0
-  register: gitops_scale_patch
-  failed_when: >
-    gitops_scale_patch is failed and
-    ('not found' not in (gitops_scale_patch.msg | default('') | lower))
-  delegate_to: "{{ inventory_hostname }}"
+      - op: add
+        path: /spec/secretRef
+        value: { "name": "{{ gitops_githubapp_secret_name }}" }
+  failed_when: false
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']
 
-# ------------------------------------------------------------
-# Wait until desired controllers are actually Available
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Wait for desired controllers to be Available"
+- name: Gitops | Request GitRepository reconciliation (poke)
   vars:
-    gitops_dep_name: "{{ item }}"
-  loop: "{{ gitops_controllers_effective }}"
+    ansible_python_interpreter: "{{ gitops_python_interpreter }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    state: patched
+    definition:
+      apiVersion: source.toolkit.fluxcd.io/v1
+      kind: GitRepository
+      metadata:
+        name: "{{ gitops_flux_gitrepo_name }}"
+        namespace: "{{ gitops_namespace }}"
+        annotations:
+          reconcile.fluxcd.io/requestedAt: "{{ ansible_date_time.iso8601 }}"
+      spec: {}
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']
+
+- name: Gitops | Read back GitRepository secretRef (verify)
+  vars:
+    ansible_python_interpreter: "{{ gitops_python_interpreter }}"
   kubernetes.core.k8s_info:
-    api_version: apps/v1
-    kind: Deployment
+    kubeconfig: "{{ gitops_kubeconfig }}"
+    api_version: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
     namespace: "{{ gitops_namespace }}"
-    name: "{{ gitops_dep_name }}"
+    name: "{{ gitops_flux_gitrepo_name }}"
+  register: gitops_gitrepo_info
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']
+
+# Optional verification block (read-only) to aid debugging and CI logs
+- name: Gitops | Read back GitRepository secretRef (verify)
+  kubernetes.core.k8s_info:
     kubeconfig: "{{ gitops_kubeconfig }}"
-  register: gitops_dep_info
-  retries: 60
-  delay: 5
-  until: >
-    (gitops_dep_info.resources | length) > 0 and
-    (gitops_dep_info.resources[0].status.availableReplicas | default(0) | int) >= 1
-  delegate_to: "{{ inventory_hostname }}"
+    api_version: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
+    namespace: "{{ gitops_namespace }}"
+    name: "{{ gitops_flux_gitrepo_name }}"
+  register: gitops_gitrepo_info
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']
 
-# ------------------------------------------------------------
-# GitHub App Secret + cluster sync (GitRepository + Kustomization)
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Apply GitHub App secret (Git provider auth)"
-  kubernetes.core.k8s:
-    state: present
-    apply: true
-    kubeconfig: "{{ gitops_kubeconfig }}"
-    definition: "{{ lookup('template', 'secret-githubapp.yaml.j2') | from_yaml }}"
-  delegate_to: "{{ inventory_hostname }}"
-
-- name: Gitops | "Flux | Apply GitRepository + Kustomization (cluster sync)"
-  kubernetes.core.k8s:
-    state: present
-    apply: true
-    kubeconfig: "{{ gitops_kubeconfig }}"
-    definition: "{{ lookup('template', 'cluster-sync.yaml.j2') | from_yaml_all }}"
-  delegate_to: "{{ inventory_hostname }}"
-
-# ------------------------------------------------------------
-# Safe reconcile "kick" via annotations (idempotent)
-# ------------------------------------------------------------
-- name: Gitops | "Flux | Kick source reconcile (idempotent via annotation)"
-  ansible.builtin.command:
-    cmd: >
-      kubectl --kubeconfig={{ gitops_kubeconfig }} -n {{ gitops_namespace }}
-      annotate --overwrite gitrepository/flux-system
-      reconcile.fluxcd.io/requestedAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  changed_when: true
-  delegate_to: "{{ inventory_hostname }}"
-
-- name: Gitops | "Flux | Kick kustomization reconcile (idempotent via annotation)"
-  ansible.builtin.command:
-    cmd: >
-      kubectl --kubeconfig={{ gitops_kubeconfig }} -n {{ gitops_namespace }}
-      annotate --overwrite kustomization/flux-system
-      reconcile.fluxcd.io/requestedAt="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  changed_when: true
-  delegate_to: "{{ inventory_hostname }}"
+- name: Gitops | Debug secretRef and URL (verify)
+  ansible.builtin.debug:
+    msg:
+      name: "{{ gitops_gitrepo_info.resources[0].metadata.name | default(gitops_flux_gitrepo_name) }}"
+      secretRef: "{{ gitops_gitrepo_info.resources[0].spec.secretRef | default({}) }}"
+      url: "{{ gitops_gitrepo_info.resources[0].spec.url | default('n/a') }}"
+  when: gitops_gitrepo_info.resources | length > 0
+  delegate_to: localhost
+  run_once: true
+  tags: ['gitops']

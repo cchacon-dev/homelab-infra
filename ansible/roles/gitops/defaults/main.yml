@@ -1,7 +1,6 @@
 ---
 # Version pinning for reproducibility. Bump only via PRs.
 gitops_flux_version: "v2.7.2"
-gitops_kubeconfig: "/etc/rancher/k3s/k3s.yaml"
 
 gitops_release_base: "https://github.com/fluxcd/flux2/releases/download"
 gitops_install_manifest_path: "/tmp/flux-install.yaml"
@@ -19,9 +18,14 @@ gitops_controllers:
   - helm-controller
   - notification-controller
 
-gitops_namespace: flux-system
 gitops_pull_secret_name: flux-system
 
 gitops_github_app_id_internal: "{{ gitops_github_app_id }}"
 gitops_github_installation_id_internal: "{{ gitops_github_installation_id }}"
 gitops_github_private_key_pem_internal: "{{ gitops_github_app_private_key }}"
+
+gitops_githubapp_secret_name: "homelab-ghapp"
+gitops_flux_gitrepo_name: "flux-system"
+gitops_namespace: "flux-system"
+gitops_kubeconfig: "/tmp/k3s_cp01_kubeconfig.yaml"
+gitops_python_interpreter: "{{ ansible_playbook_python }}"  # default (pipx)
