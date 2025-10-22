@@ -9,7 +9,7 @@ ignore: |
   .tox/
   node_modules/
   ansible/inventory/prod/group_vars/all/vault.yml
-
+  .github/workflows/*
 rules:
   comments:
     min-spaces-from-content: 1
