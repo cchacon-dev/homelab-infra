@@ -1,226 +1,144 @@
 # 🧩 homelab-infra
 
 [![Lint](https://github.com/cchacon-dev/homelab-infra/actions/workflows/lint.yml/badge.svg)](https://github.com/cchacon-dev/homelab-infra/actions/workflows/lint.yml)
-[![Molecule](https://github.com/cchacon-dev/homelab-infra/actions/workflows/molecule.yml/badge.svg)](https://github.com/cchacon-dev/homelab-infra/actions/workflows/molecule.yml)
+[![Build](https://img.shields.io/badge/ansible-idempotent-blue)](#)
+[![K3s](https://img.shields.io/badge/k3s-ready-green)](#)
+[![FluxCD](https://img.shields.io/badge/gitops-fluxcd-2ea44f)](#)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)](#)
 
-Infrastructure-as-Code repository to bootstrap and configure a **bare-metal homelab** using **Ansible**.
-The project focuses on building a reproducible, production-like environment on low-cost hardware — fully automated and modular.
+Infrastructure-as-Code (IaC) project to bootstrap a **bare-metal homelab** using **Ubuntu Server, Ansible, K3s, Cilium, and FluxCD**.
+The goal is to let **anyone** spin up a production-like Kubernetes environment on physical nodes — fully automated and reproducible.
 
-> ⚡️ This is part of my personal **DevOps learning journey**.
-> It aims to explore **Ansible**, **K3s**, and **GitOps** workflows for real-world homelab operations.
-
----
-
-## 🎯 Goals
-
-- Reproducible configuration across all nodes
-- Idempotent, role-based provisioning
-- Seamless horizontal scaling (add a node → run one command)
-- Clear separation of concerns:
-  - **This repo:** Infrastructure provisioning
-  - **Future repo:** GitOps-based cluster state (FluxCD, manifests, etc.)
-- Easy recovery workflows, including **worker reset when the control plane is replaced**
+> 🧠 This is my **first Ansible project**, built as part of my DevOps learning journey and personal portfolio.
+> Designed to be **simple, readable, and educational**, while following best practices in modularity and idempotency.
 
 ---
 
-## 🧰 Tooling & Stack
+## ✨ Features
 
-[![Ansible](https://img.shields.io/badge/Ansible-Automation-black?logo=ansible)](https://www.ansible.com/)
-[![Molecule](https://img.shields.io/badge/Molecule-Role%20Testing-blue)](https://molecule.readthedocs.io/)
-[![ansible-lint](https://img.shields.io/badge/ansible--lint-QA-success)](https://ansible.readthedocs.io/projects/lint/)
-[![yamllint](https://img.shields.io/badge/yamllint-style-green)](https://yamllint.readthedocs.io/)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://pre-commit.com/)
-
-**Current stack:**
-- Ubuntu Server 22.04 / 24.04 LTS
-- K3s (lightweight Kubernetes)
-- Ansible roles for base setup, hardening, and networking (Cilium coming soon)
-- GitHub Actions CI for linting and Molecule testing
+- ✅ **Idempotent** — safe to re-run anytime
+- 🧱 **Role-based structure** (`base`, `k3s`, `cilium`, `gitops`)
+- 🗂️ **Inventory per environment** (`ansible/inventory/prod`)
+- 🔐 **Ansible Vault** ready for secrets
+- 🕸️ **Cilium** as the Kubernetes CNI
+- 🌀 **FluxCD** preinstalled and syncing against a private GitOps repository
+- 🧪 *Molecule* was removed for faster iteration but can be re-added later
+- 🧹 **Linting ready** with `ansible-lint`, `yamllint`, and `pre-commit`
 
 ---
 
-## 🏗️ Project Layout
+## 🧭 Architecture Overview
+
+```
+Ubuntu nodes ──(Ansible)──> K3s cluster
+                         └──> Cilium CNI
+                         └──> FluxCD (GitOps) ──> private GitOps repo (manifests)
+```
+
+After provisioning, all cluster state and applications can be managed declaratively via GitOps.
+
+## 📸 Screenshots
+
+| Homelab Overview | Cluster Ready | Flux Sync |
+|------------------|---------------|------------|
+| ![Overview](docs/overview.png) | ![Cluster Ready](docs/cluster-ready.png) | ![Flux Sync](docs/flux-sync.png) |
+
+---
+
+## ⚙️ Requirements
+
+- One or more **Ubuntu Server** nodes (control-plane + workers) accessible via SSH
+- A control machine with **Ansible ≥ 2.15** and `kubectl`
+- SSH keys exchanged between controller and nodes
+- Variables filled in `ansible/inventory/prod/group_vars/all/main.yml` (IPs, CIDRs, versions, etc.)
+- (Optional) `ansible-vault` configured for secrets
+
+---
+
+## 🚀 Quickstart
+
+1. **Clone this repo** and configure inventory and variables:
+
+   ```bash
+   cp -r ansible/inventory/prod ansible/inventory/local   # optional
+   $EDITOR ansible/inventory/prod/hosts.ini
+   $EDITOR ansible/inventory/prod/group_vars/all/main.yml
+   ```
+
+2. **Check connectivity**
+
+   ```bash
+   ansible -i ansible/inventory/prod/hosts.ini all -m ping
+   ```
+
+3. **Deploy step by step**
+
+   ```bash
+   ansible-playbook -i ansible/inventory/prod/hosts.ini ansible/site.yml --tags base
+   ansible-playbook -i ansible/inventory/prod/hosts.ini ansible/site.yml --tags k3s
+   ansible-playbook -i ansible/inventory/prod/hosts.ini ansible/site.yml --tags cilium
+   ansible-playbook -i ansible/inventory/prod/hosts.ini ansible/site.yml --tags gitops
+   ```
+
+4. **Validate the cluster**
+
+   ```bash
+   kubectl get nodes -o wide
+   kubectl -n flux-system get kustomizations,gitrepositories
+   ```
+
+---
+
+## 🗃️ Repository Layout
 
 ```
 ansible/
+  ansible.cfg
+  site.yml
   inventory/
     prod/
-      hosts.yml
+      hosts.ini
       group_vars/
         all/
           main.yml
-          vault.yml              # Encrypted secrets (Ansible Vault)
-  playbooks/
-    bootstrap.yml                # First-run setup (SSH keys, sudo, hardening)
-    site.yml                     # Main configuration for all nodes
-    reset_workers.yml            # Reset K3s workers after CP reinstall
+          vault.yml        # encrypted secrets
   roles/
-    base/                        # Common baseline role
-      tasks/
-      templates/
-      files/
-collections/
-  requirements.yml
-
-.pre-commit-config.yaml
-.ansible-lint
-.yamllint
+    base/
+      defaults/ handlers/ tasks/ templates/
+    k3s/
+      defaults/ tasks/
+    cilium/
+      defaults/ tasks/
+    gitops/
+      defaults/ tasks/
 ```
 
 ---
 
-## ⚙️ Pre-Setup
+## 🌐 Ingress / Gateway Options
 
-Perform these steps **once per node** (control plane and workers):
+Choose what fits your environment best (defined later in your GitOps manifests):
 
-1. **Install Ubuntu Server (minimal)**
-   Assign a hostname like `cp01-homelab`, `wk01-homelab`, etc.
+| Type | Recommended Tools | Notes |
+|------|-------------------|-------|
+| **Standard Route** | Ingress-NGINX, ExternalDNS, cert-manager | Classic setup. Works great with **Cloudflare** for automatic DNS + TLS (DNS-01 solver). |
+| **Zero-Trust Route** | Cloudflare Tunnel (`cloudflared`) + your Ingress/Gateway | Expose internal services to the Internet without open ports — great for homelabs behind NAT. |
 
-2. **Create the `ansible` user** with sudo privileges:
-
-   ```bash
-   sudo adduser ansible
-   sudo usermod -aG sudo ansible
-   echo 'ansible ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/90-ansible >/dev/null
-   sudo chmod 440 /etc/sudoers.d/90-ansible
-   sudo passwd ansible
-   ```
-
-3. **Copy your SSH public key:**
-
-   ```bash
-   ssh-copy-id ansible@<host-ip>
-   ```
-
-4. **Create a Vault file** for secrets:
-
-   ```bash
-   ansible-vault create ansible/inventory/prod/group_vars/all/vault.yml
-   ```
-
-   ```yaml
-   ---
-   ansible_user: ansible
-   ansible_become_password: "<ansible password>"
-   ```
+> Both setups can coexist.
+> Start with the **Ingress-NGINX + ExternalDNS + cert-manager** combo, then explore Cloudflare Tunnels as an advanced layer.
 
 ---
 
-## 🚀 Quick Start
+## 👤 Author
 
-1. **Install local tooling**
+> **Carlos Chacon** — Senior software developer & DevOps enthusiast.
+> This project documents my hands-on journey into Infrastructure as Code and GitOps automation.
 
-   ```bash
-   pipx install ansible-core ansible-lint molecule yamllint pre-commit
-   pipx inject molecule docker
-   pre-commit install
-   ```
-
-2. **Install Ansible collections**
-
-   ```bash
-   ansible-galaxy collection install -r collections/requirements.yml
-   ```
-
-3. **Set your inventory**
-
-   ```yaml
-   all:
-     children:
-       control_plane:
-         hosts:
-           cp01-homelab:
-             ansible_host: 192.168.1.10
-       workers:
-         hosts:
-           wk01-homelab:
-             ansible_host: 192.168.1.11
-           wk02-homelab:
-             ansible_host: 192.168.1.12
-   ```
-
-4. **Bootstrap (first run)**
-
-   ```bash
-   ansible-playbook ansible/playbooks/bootstrap.yml -i ansible/inventory/prod/hosts.yml --ask-vault-pass
-   ```
-
-5. **Main configuration**
-
-   ```bash
-   ansible-playbook ansible/playbooks/site.yml -i ansible/inventory/prod/hosts.yml --ask-vault-pass
-   ```
+- GitHub Infra: https://github.com/cchacon-dev/homelab-infra
+- GitOps repo: Private (Preparing and gitops starter)
 
 ---
 
-## 🔁 Maintenance & Recovery
+## 📝 License
 
-### 🔹 Reset Workers
-
-If the control plane is reinstalled or replaced, you can **safely clean and re-join the worker nodes**:
-
-```bash
-ansible-playbook ansible/playbooks/reset_workers.yml -i ansible/inventory/prod/hosts.yml
-```
-
-This playbook:
-- Stops the `k3s-agent` service
-- Runs the uninstall script if available
-- Removes all K3s directories and binaries
-- Reloads systemd for a clean state
-
-Afterwards, simply rerun your main playbook:
-
-```bash
-ansible-playbook ansible/playbooks/site.yml -i ansible/inventory/prod/hosts.yml --ask-vault-pass
-```
-
----
-
-## 🧪 Testing & Quality
-
-- **Lint all YAML and roles**
-  ```bash
-  ansible-lint
-  yamllint .
-  ```
-
-- **Run Molecule tests per role**
-  ```bash
-  cd ansible/roles/base
-  molecule test
-  ```
-
-- **Run pre-commit hooks**
-  ```bash
-  pre-commit run -a
-  ```
-
-> Secrets files (`vault.yml`) should be excluded from linting to avoid decryption errors.
-
----
-
-## 🧱 Production-like Choices (on a budget)
-
-- Idempotent, self-documenting roles
-- Passwordless sudo + SSH key-only access
-- Secrets stored in **Ansible Vault**
-- Consistent structure per environment (`prod`, future `dev`)
-- CI lint + Molecule for every role
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Add `docker` and `k3s` roles
-- [ ] Add `cilium` for networking
-- [ ] Implement `fluxcd` GitOps repo (separate project)
-- [ ] Centralized monitoring stack
-
----
-
-## 📜 License
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-MIT © Carlos — *homelab-infra*
+MIT License © 2025 Carlos
