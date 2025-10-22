@@ -1,3 +1,4 @@
+---
 name: Lint
 
 on:
@@ -11,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+      ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections:/usr/share/ansible/collections
 
     steps:
       - name: Checkout
@@ -31,18 +35,14 @@ jobs:
             pre-commit
 
       - name: Install Ansible Galaxy collections
-        env:
-          ANSIBLE_COLLECTIONS_PATH: ~/.ansible/collections:/usr/share/ansible/collections
         run: |
           ansible-galaxy collection install -r collections/requirements.yml -p ~/.ansible/collections
 
       - name: Write Ansible Vault password
-        if: ${{ secrets.ANSIBLE_VAULT_PASSWORD != '' }}
-        env:
-          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        if: env.ANSIBLE_VAULT_PASSWORD != ''
         run: |
           mkdir -p ~/.ansible
-          printf "%s" "$ANSIBLE_VAULT_PASSWORD" > ~/.ansible/vault_pass.txt
+          printf "%s" "$ANNSIBLE_VAULT_PASSWORD" > ~/.ansible/vault_pass.txt
           chmod 600 ~/.ansible/vault_pass.txt
           echo "ANSIBLE_VAULT_PASSWORD_FILE=$HOME/.ansible/vault_pass.txt" >> $GITHUB_ENV
 
